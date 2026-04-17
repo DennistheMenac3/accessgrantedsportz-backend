@@ -35,22 +35,21 @@ export const create = async (
 
     const invite = await createInvite(leagueId, userId, maxUses);
 
-    // Build the invite URL
-    const baseUrl    = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const inviteUrl  = `${baseUrl}/join/${invite.invite_code}`;
-    const discordMsg =
+    const frontendUrl = process.env.FRONTEND_URL || 'https://accessgrantedsportz.com';
+    const inviteUrl   = `${frontendUrl}/invite/${invite.invite_code}`;
+    const discordMsg  =
       `🏈 **Join ${req.body.league_name || 'our Madden league'} on AccessGrantedSportz!**\n` +
       `Use invite code: **${invite.invite_code}**\n` +
       `Or click: ${inviteUrl}\n` +
       `Expires in 30 days | ${maxUses} spots available`;
 
     res.status(201).json({
-      success:     true,
-      message:     'Invite created successfully',
-      invite_code: invite.invite_code,
-      invite_url:  inviteUrl,
-      expires_at:  invite.expires_at,
-      max_uses:    invite.max_uses,
+      success:         true,
+      message:         'Invite created successfully',
+      invite_code:     invite.invite_code,
+      invite_url:      inviteUrl,
+      expires_at:      invite.expires_at,
+      max_uses:        invite.max_uses,
       discord_message: discordMsg
     });
 
@@ -98,9 +97,10 @@ export const validate = async (
     );
 
     res.status(200).json({
-      success:   true,
-      valid:     true,
+      success: true,
+      valid:   true,
       league: {
+        id:     invite.league_id,
         name:   invite.league_name,
         sport:  invite.sport,
         season: invite.season
@@ -146,9 +146,7 @@ export const join = async (
       return;
     }
 
-    // Assign team to user if they picked one
     if (teamId) {
-      // Check team isn't already taken
       const teamCheck = await query(
         `SELECT owner_id FROM teams WHERE id = $1`,
         [teamId]
@@ -162,13 +160,12 @@ export const join = async (
         return;
       }
 
-      // Claim the team
       await query(
         `UPDATE teams SET
           owner_id       = $1,
           owner_username = $2
          WHERE id = $3
-         AND league_id = $4`,
+         AND league_id   = $4`,
         [
           userId,
           req.user!.username,
@@ -177,12 +174,11 @@ export const join = async (
         ]
       );
 
-      // Update league member record with team
       await query(
         `UPDATE league_members
          SET team_id = $1
          WHERE league_id = $2
-         AND user_id = $3`,
+         AND user_id     = $3`,
         [teamId, invite.league_id, userId]
       );
     }
@@ -255,19 +251,20 @@ export const getMembers = async (
 
     const result = await query(
       `SELECT
-        u.id as user_id,
+        u.id            as user_id,
         u.username,
         u.email,
         lm.role,
         lm.joined_at,
-        t.id as team_id,
-        t.name as team_name,
+        t.id            as team_id,
+        t.name          as team_name,
         t.abbreviation,
-        t.wins, t.losses,
+        t.wins,
+        t.losses,
         t.overall_rating,
         t.team_logo_url
        FROM league_members lm
-       JOIN users u ON u.id = lm.user_id
+       JOIN users u  ON u.id  = lm.user_id
        LEFT JOIN teams t ON t.id = lm.team_id
        WHERE lm.league_id = $1
        ORDER BY lm.joined_at ASC`,
