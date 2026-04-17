@@ -4,8 +4,8 @@
   "description": "AccessGrantedSportz API Backend",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "npx kill-port 3000 && nodemon --exec ts-node src/index.ts",
-    "build": "rm -rf dist && npx tsc",
+    "dev": "nodemon --exec \"npx kill-port 3000 && npx ts-node src/index.ts\" --delay 2",
+    "build": "rm -rf dist && ./node_modules/.bin/tsc",
     "start": "node dist/index.js"
   },
   "keywords": [],
