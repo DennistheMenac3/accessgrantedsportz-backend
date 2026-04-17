@@ -2,31 +2,14 @@ import { Pool, QueryResult } from 'pg';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const pool = new Pool(
-  process.env.DATABASE_URL
-    ? {
-        connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false }
-      }
-    : {
-        host:     process.env.DB_HOST,
-        port:     parseInt(process.env.DB_PORT || '5432'),
-        database: process.env.DB_NAME,
-        user:     process.env.DB_USER,
-        password: process.env.DB_PASSWORD
-      }
-);
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production'
+    ? { rejectUnauthorized: false }
+    : false
+});
 
-// =============================================
-// Test connection on startup
-// =============================================
 const connectDB = async (): Promise<void> => {
-  console.log('🔍 Attempting database connection with:');
-  console.log(`   Host:     ${process.env.DB_HOST || 'Railway URL'}`);
-  console.log(`   Port:     ${process.env.DB_PORT || '5432'}`);
-  console.log(`   Database: ${process.env.DB_NAME || 'railway'}`);
-  console.log(`   User:     ${process.env.DB_USER || 'postgres'}`);
-
   try {
     const client = await pool.connect();
     client.release();
@@ -38,11 +21,8 @@ const connectDB = async (): Promise<void> => {
 
 connectDB();
 
-// =============================================
-// Query helper — used throughout the app
-// =============================================
 export const query = async (
-  text:   string,
+  text:    string,
   params?: any[]
 ): Promise<QueryResult> => {
   try {
