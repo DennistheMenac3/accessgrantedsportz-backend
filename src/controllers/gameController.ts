@@ -10,6 +10,12 @@ import {
   getLeagueLeaders
 } from '../models/gameModel';
 import { updateTeam } from '../models/teamModel';
+import { query } from '../config/database';
+import { calculateAllAwards } from '../services/awardsService';
+import {
+  autoPostGameRecap,
+  autoPostAwardUpdate
+} from '../services/schedulerService';
 
 // =============================================
 // CREATE GAME
@@ -31,7 +37,6 @@ export const create = async (
       played_at
     } = req.body;
 
-    // Validate required fields
     if (!home_team_id || !away_team_id || !week || !season) {
       res.status(400).json({
         success: false,
@@ -40,7 +45,6 @@ export const create = async (
       return;
     }
 
-    // Cant play against yourself
     if (home_team_id === away_team_id) {
       res.status(400).json({
         success: false,
@@ -55,12 +59,11 @@ export const create = async (
       away_team_id,
       home_score,
       away_score,
-      week: parseInt(week),
+      week:   parseInt(week),
       season: parseInt(season),
       played_at
     });
 
-    // If scores were provided update team records
     if (home_score !== undefined && away_score !== undefined) {
       await updateTeamRecords(
         home_team_id,
@@ -98,8 +101,8 @@ export const getAll = async (
     const { week, season, team_id } = req.query;
 
     const games = await getGamesByLeague(leagueId, {
-      week:    week    ? parseInt(week as string)    : undefined,
-      season:  season  ? parseInt(season as string)  : undefined,
+      week:    week    ? parseInt(week    as string) : undefined,
+      season:  season  ? parseInt(season  as string) : undefined,
       team_id: team_id as string
     });
 
@@ -127,7 +130,7 @@ export const getOne = async (
   res: Response
 ): Promise<void> => {
   try {
-    const id = req.params.id as string;
+    const id   = req.params.id as string;
     const game = await getGameById(id);
 
     if (!game) {
@@ -155,16 +158,17 @@ export const getOne = async (
 // =============================================
 // SUBMIT GAME STATS
 // POST /api/leagues/:leagueId/games/:id/stats
+// Triggers auto-post to Discord automatically
 // =============================================
 export const submitStats = async (
   req: AuthRequest,
   res: Response
 ): Promise<void> => {
   try {
-    const gameId = req.params.id as string;
-    const { home_score, away_score, stats } = req.body;
+    const leagueId = req.params.leagueId as string;
+    const gameId   = req.params.id       as string;
+    const { home_score, away_score, stats, season } = req.body;
 
-    // Validate
     if (!stats || !Array.isArray(stats) || stats.length === 0) {
       res.status(400).json({
         success: false,
@@ -173,7 +177,6 @@ export const submitStats = async (
       return;
     }
 
-    // Get the game first
     const game = await getGameById(gameId);
     if (!game) {
       res.status(404).json({
@@ -189,8 +192,6 @@ export const submitStats = async (
     // Update final score if provided
     if (home_score !== undefined && away_score !== undefined) {
       await updateGameScore(gameId, home_score, away_score);
-
-      // Update team win/loss records
       await updateTeamRecords(
         game.home_team_id,
         game.away_team_id,
@@ -199,14 +200,60 @@ export const submitStats = async (
       );
     }
 
-    // Get the updated game with full box score
+    // Get updated game
     const updatedGame = await getGameById(gameId);
 
+    // Send response immediately — don't wait for Discord
     res.status(200).json({
       success: true,
       message: 'Game stats submitted successfully',
       game: updatedGame
     });
+
+    // =============================================
+    // AUTO-POST TO DISCORD (runs after response)
+    // Non-blocking — won't slow down the API
+    // =============================================
+    const currentSeason = season || game.season || 1;
+
+    try {
+      const leagueResult = await query(
+        `SELECT discord_channel_id FROM leagues WHERE id = $1`,
+        [leagueId]
+      );
+
+      const channelId = leagueResult.rows[0]?.discord_channel_id;
+
+      if (channelId) {
+        console.log(`📡 Discord channel found — auto-posting...`);
+
+        // Recalculate awards with new stats
+        await calculateAllAwards(leagueId, currentSeason);
+        console.log(`🏆 Awards recalculated`);
+
+        // Post game recap
+        await autoPostGameRecap(
+          leagueId,
+          gameId,
+          currentSeason,
+          channelId
+        );
+
+        // Post award update
+        await autoPostAwardUpdate(
+          leagueId,
+          channelId,
+          currentSeason
+        );
+
+        console.log(`✅ Auto-post complete for game ${gameId}`);
+      } else {
+        console.log(`ℹ️ No Discord channel set — skipping auto-post`);
+      }
+    } catch (discordError) {
+      // Never crash the API because of Discord
+      console.error('Discord auto-post error:', discordError);
+    }
 
   } catch (error) {
     console.error('Submit stats error:', error);
@@ -228,8 +275,7 @@ export const getPlayerStats = async (
   try {
     const playerId = req.params.playerId as string;
     const season   = parseInt(req.params.season as string);
-
-    const stats = await getPlayerSeasonStats(playerId, season);
+    const stats    = await getPlayerSeasonStats(playerId, season);
 
     if (!stats) {
       res.status(404).json({
@@ -280,24 +326,23 @@ export const getLeaders = async (
       success: true,
       stat,
       season,
-      count: leaders.length,
+      count:   leaders.length,
       leaders
     });
 
   } catch (error: any) {
     console.error('Get leaders error:', error);
 
-    // Handle invalid stat column error
     if (error.message?.includes('Invalid stat column')) {
       res.status(400).json({
         success: false,
         message: error.message,
         valid_stats: [
-          'pass_yards', 'pass_touchdowns',
-          'rush_yards', 'rush_touchdowns',
-          'receiving_yards', 'receptions',
+          'pass_yards',         'pass_touchdowns',
+          'rush_yards',         'rush_touchdowns',
+          'receiving_yards',    'receptions',
           'receiving_touchdowns', 'tackles',
-          'sacks', 'forced_fumbles',
+          'sacks',              'forced_fumbles',
           'interceptions'
         ]
       });
@@ -313,23 +358,18 @@ export const getLeaders = async (
 
 // =============================================
 // HELPER — Update team win/loss records
-// Called automatically when a game score
-// is submitted
 // =============================================
 const updateTeamRecords = async (
   home_team_id: string,
   away_team_id: string,
-  home_score: number,
-  away_score: number
+  home_score:   number,
+  away_score:   number
 ): Promise<void> => {
   if (home_score > away_score) {
-    // Home team won
     await updateTeam(home_team_id, { wins: 1 });
     await updateTeam(away_team_id, { losses: 1 });
   } else if (away_score > home_score) {
-    // Away team won
     await updateTeam(away_team_id, { wins: 1 });
     await updateTeam(home_team_id, { losses: 1 });
   }
-  // Ties — no wins or losses recorded
 };

@@ -1,19 +1,17 @@
 import { query } from '../config/database';
 import { v4 as uuidv4 } from 'uuid';
+import { getDivisionInfo } from '../config/nflDivisions';
 
 // =============================================
 // Helper Functions
 // =============================================
 
-// Convert Madden integer color to hex string
-// eg 2365299 → #241773
 const intToHex = (colorInt: number): string => {
   if (!colorInt) return '#000000';
   const hex = colorInt.toString(16).padStart(6, '0');
   return `#${hex}`;
 };
 
-// Convert Madden dev trait number to string
 const devTraitToString = (trait: number): string => {
   const traits: { [key: number]: string } = {
     0: 'normal',
@@ -24,66 +22,86 @@ const devTraitToString = (trait: number): string => {
   return traits[trait] || 'normal';
 };
 
-// Build team logo URL from logoId
 const buildLogoUrl = (logoId: number): string => {
   return `https://madden-assets-cdn.pulse.ea.com/madden25/logos/${logoId}.png`;
 };
 
-// Build player portrait URL from portraitId
 const buildPortraitUrl = (portraitId: number): string => {
   return `https://madden-assets-cdn.pulse.ea.com/madden25/portraits/${portraitId}.png`;
 };
 
-// Convert Madden position string to our format
 const normalizePosition = (position: string): string => {
   const positionMap: { [key: string]: string } = {
-    'QB':  'QB',
-    'HB':  'RB',
-    'FB':  'RB',
-    'WR':  'WR',
-    'TE':  'TE',
-    'LT':  'OL',
-    'LG':  'OL',
-    'C':   'OL',
-    'RG':  'OL',
-    'RT':  'OL',
-    'LE':  'DL',
-    'RE':  'DL',
-    'DT':  'DL',
-    'LOLB':'LB',
-    'MLB': 'LB',
-    'ROLB':'LB',
-    'CB':  'CB',
-    'FS':  'S',
-    'SS':  'S',
-    'K':   'K',
-    'P':   'P'
+    'QB':   'QB',
+    'HB':   'RB',
+    'FB':   'RB',
+    'WR':   'WR',
+    'TE':   'TE',
+    'LT':   'OL',
+    'LG':   'OL',
+    'C':    'OL',
+    'RG':   'OL',
+    'RT':   'OL',
+    'LE':   'DL',
+    'RE':   'DL',
+    'DT':   'DL',
+    'LOLB': 'LB',
+    'MLB':  'LB',
+    'ROLB': 'LB',
+    'CB':   'CB',
+    'FS':   'S',
+    'SS':   'S',
+    'K':    'K',
+    'P':    'P'
   };
   return positionMap[position] || position;
 };
 
 // =============================================
-// Main Ingestion Functions
-// =============================================
-
 // Process teams from Madden export
+// Now includes division/conference mapping
+// Supports both standard and custom teams
+// =============================================
 export const ingestTeams = async (
-  leagueId: string,
+  leagueId:  string,
   teamsData: any[]
 ): Promise<{
-  created: number;
-  updated: number;
-  teamIdMap: Map<number, string>;
+  created:    number;
+  updated:    number;
+  teamIdMap:  Map<number, string>;
+  unassigned: string[];
 }> => {
-  let created = 0;
-  let updated = 0;
-
-  // Map Madden teamId to our UUID
-  // We need this to link players and games
+  let created   = 0;
+  let updated   = 0;
+  const unassigned: string[] = [];
   const teamIdMap = new Map<number, string>();
 
   for (const team of teamsData) {
-    // Check if team already exists in our league
+    // =============================================
+    // DIVISION DETECTION
+    // Layer 1: Try abbreviation
+    // Layer 2: Try team name keywords
+    // Layer 3: null — commissioner assigns manually
+    // =============================================
+    const divisionInfo = getDivisionInfo(
+      team.abbrName || '',
+      `${team.cityName || ''} ${team.nickName || ''}`.trim()
+    );
+
+    if (!divisionInfo) {
+      unassigned.push(
+        `${team.cityName} ${team.nickName} (${team.abbrName})`
+      );
+      console.log(
+        `⚠️ Custom team detected — no division assigned: ` +
+        `${team.cityName} ${team.nickName} (${team.abbrName})`
+      );
+    } else {
+      console.log(
+        `✅ ${team.abbrName} → ${divisionInfo.division}`
+      );
+    }
+
     const existing = await query(
       `SELECT id FROM teams
        WHERE league_id = $1
@@ -92,7 +110,6 @@ export const ingestTeams = async (
     );
 
     if (existing.rows.length > 0) {
-      // Update existing team
       const teamId = existing.rows[0].id;
       teamIdMap.set(team.teamId, teamId);
 
@@ -104,96 +121,115 @@ export const ingestTeams = async (
           team_logo_url   = $4,
           primary_color   = $5,
           secondary_color = $6,
+          conference      = COALESCE($7, conference),
+          division        = COALESCE($8, division),
           updated_at      = CURRENT_TIMESTAMP
-         WHERE id = $7`,
+         WHERE id = $9`,
         [
           team.nickName,
           team.cityName,
-          team.overallRating || 70,
+          team.overallRating  || 70,
           buildLogoUrl(team.logoId),
           intToHex(team.primaryColor),
           intToHex(team.secondaryColor),
+          divisionInfo?.conference || null,
+          divisionInfo?.division   || null,
           teamId
         ]
       );
       updated++;
     } else {
-      // Create new team
       const newId = uuidv4();
       teamIdMap.set(team.teamId, newId);
 
+      const leagueOwner = await query(
+        'SELECT owner_id FROM leagues WHERE id = $1',
+        [leagueId]
+      );
+
       await query(
         `INSERT INTO teams (
-          id, league_id, owner_id, name,
-          abbreviation, city, overall_rating,
-          team_logo_url, primary_color, secondary_color
+          id, league_id, owner_id,
+          name, abbreviation, city,
+          overall_rating, team_logo_url,
+          primary_color, secondary_color,
+          conference, division
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        VALUES (
+          $1, $2, $3, $4, $5, $6,
+          $7, $8, $9, $10, $11, $12
+        )`,
         [
           newId,
           leagueId,
-          // Get league owner as default team owner
-          (await query(
-            'SELECT owner_id FROM leagues WHERE id = $1',
-            [leagueId]
-          )).rows[0]?.owner_id,
+          leagueOwner.rows[0]?.owner_id,
           team.nickName,
           team.abbrName,
           team.cityName,
-          team.overallRating || 70,
+          team.overallRating  || 70,
           buildLogoUrl(team.logoId),
           intToHex(team.primaryColor),
-          intToHex(team.secondaryColor)
+          intToHex(team.secondaryColor),
+          divisionInfo?.conference || null,
+          divisionInfo?.division   || null
         ]
       );
       created++;
     }
   }
 
-  return { created, updated, teamIdMap };
+  if (unassigned.length > 0) {
+    console.log(
+      `\n⚠️ ${unassigned.length} custom teams need manual division assignment:`
+    );
+    unassigned.forEach(t => console.log(`   • ${t}`));
+    console.log(
+      `Use PUT /api/leagues/:leagueId/teams/:id/division to assign\n`
+    );
+  }
+
+  return { created, updated, teamIdMap, unassigned };
 };
 
+// =============================================
 // Process players from Madden export
+// =============================================
 export const ingestPlayers = async (
-  leagueId: string,
-  season: number,
+  leagueId:    string,
+  season:      number,
   rostersData: any[],
-  teamIdMap: Map<number, string>
+  teamIdMap:   Map<number, string>
 ): Promise<{
-  created: number;
-  updated: number;
+  created:     number;
+  updated:     number;
   playerIdMap: Map<number, string>;
 }> => {
   let created = 0;
   let updated = 0;
-
-  // Map Madden rosterId to our UUID
   const playerIdMap = new Map<number, string>();
 
   for (const player of rostersData) {
     const teamId = teamIdMap.get(player.teamId);
     if (!teamId) continue;
 
-    const position = normalizePosition(player.position);
-    const devTrait = devTraitToString(player.devTrait);
+    const position    = normalizePosition(player.position);
+    const devTrait    = devTraitToString(player.devTrait);
     const portraitUrl = player.portraitId
       ? buildPortraitUrl(player.portraitId)
       : null;
 
-    // Check if player already exists
     const existing = await query(
       `SELECT id FROM players
        WHERE league_id = $1
-       AND first_name = $2
-       AND last_name = $3
-       AND position = $4`,
+       AND first_name  = $2
+       AND last_name   = $3
+       AND position    = $4`,
       [leagueId, player.firstName, player.lastName, position]
     );
 
     let playerId: string;
 
     if (existing.rows.length > 0) {
-      // Update existing player
       playerId = existing.rows[0].id;
       playerIdMap.set(player.rosterId, playerId);
 
@@ -213,19 +249,18 @@ export const ingestPlayers = async (
         [
           teamId,
           player.overallRating || 70,
-          player.age || 22,
-          player.speed || 70,
-          player.strength || 70,
-          player.awareness || 70,
+          player.age           || 22,
+          player.speed         || 70,
+          player.strength      || 70,
+          player.awareness     || 70,
           devTrait,
-          player.yearsPro || 0,
+          player.yearsPro      || 0,
           portraitUrl,
           playerId
         ]
       );
       updated++;
     } else {
-      // Create new player
       playerId = uuidv4();
       playerIdMap.set(player.rosterId, playerId);
 
@@ -250,30 +285,31 @@ export const ingestPlayers = async (
           player.lastName,
           position,
           player.overallRating || 70,
-          player.age || 22,
-          player.speed || 70,
-          player.strength || 70,
-          player.awareness || 70,
+          player.age           || 22,
+          player.speed         || 70,
+          player.strength      || 70,
+          player.awareness     || 70,
           devTrait,
-          player.yearsPro || 0,
+          player.yearsPro      || 0,
           portraitUrl
         ]
       );
       created++;
     }
 
-    // Save full player traits
     await saveTraits(playerId, season, player);
   }
 
   return { created, updated, playerIdMap };
 };
 
+// =============================================
 // Save all player traits from Madden data
+// =============================================
 const saveTraits = async (
   playerId: string,
-  season: number,
-  player: any
+  season:   number,
+  player:   any
 ): Promise<void> => {
   await query(
     `INSERT INTO player_traits (
@@ -375,75 +411,77 @@ const saveTraits = async (
       updated_at           = CURRENT_TIMESTAMP`,
     [
       uuidv4(), playerId, season,
-      player.height        || null,
-      player.weight        || null,
-      player.speed         || null,
-      player.acceleration  || null,
-      player.agility       || null,
-      player.changeOfDirection || player.agility || null,
-      player.jumping       || null,
-      player.strength      || null,
-      player.stamina       || null,
-      player.awareness     || null,
-      player.injury        || null,
-      player.toughness     || null,
-      player.throwPower    || null,
+      player.height             || null,
+      player.weight             || null,
+      player.speed              || null,
+      player.acceleration       || null,
+      player.agility            || null,
+      player.changeOfDirection  || player.agility || null,
+      player.jumping            || null,
+      player.strength           || null,
+      player.stamina            || null,
+      player.awareness          || null,
+      player.injury             || null,
+      player.toughness          || null,
+      player.throwPower         || null,
       player.throwAccuracyShort || null,
       player.throwAccuracyMid   || null,
       player.throwAccuracyDeep  || null,
-      player.throwOnRun    || null,
-      player.playAction    || null,
-      player.breakSack     || null,
-      player.carrying      || null,
-      player.breakTackle   || null,
-      player.trucking      || null,
-      player.spinMove      || null,
-      player.jukeMove      || null,
-      player.stiffArm      || null,
-      player.ballCarrierVision || null,
-      player.catching      || null,
-      player.catchInTraffic || null,
-      player.routeRunningShort || null,
-      player.routeRunningMid   || null,
-      player.routeRunningDeep  || null,
-      player.spectacularCatch  || null,
-      player.release       || null,
-      player.passBlock     || null,
-      player.passBlockPower || null,
-      player.passBlockFinesse || null,
-      player.runBlock      || null,
-      player.runBlockPower || null,
-      player.runBlockFinesse || null,
-      player.impactBlocking || null,
-      player.tackle        || null,
-      player.hitPower      || null,
-      player.pursuit       || null,
-      player.playRecognition || null,
-      player.blockShedding || null,
-      player.powerMove     || null,
-      player.finesseMove   || null,
-      player.manCoverage   || null,
-      player.zoneCoverage  || null,
-      player.press         || null,
-      player.catchAllowed  || null,
-      player.kickPower     || null,
-      player.kickAccuracy  || null,
-      player.kickReturn    || null
+      player.throwOnRun         || null,
+      player.playAction         || null,
+      player.breakSack          || null,
+      player.carrying           || null,
+      player.breakTackle        || null,
+      player.trucking           || null,
+      player.spinMove           || null,
+      player.jukeMove           || null,
+      player.stiffArm           || null,
+      player.ballCarrierVision  || null,
+      player.catching           || null,
+      player.catchInTraffic     || null,
+      player.routeRunningShort  || null,
+      player.routeRunningMid    || null,
+      player.routeRunningDeep   || null,
+      player.spectacularCatch   || null,
+      player.release            || null,
+      player.passBlock          || null,
+      player.passBlockPower     || null,
+      player.passBlockFinesse   || null,
+      player.runBlock           || null,
+      player.runBlockPower      || null,
+      player.runBlockFinesse    || null,
+      player.impactBlocking     || null,
+      player.tackle             || null,
+      player.hitPower           || null,
+      player.pursuit            || null,
+      player.playRecognition    || null,
+      player.blockShedding      || null,
+      player.powerMove          || null,
+      player.finesseMove        || null,
+      player.manCoverage        || null,
+      player.zoneCoverage       || null,
+      player.press              || null,
+      player.catchAllowed       || null,
+      player.kickPower          || null,
+      player.kickAccuracy       || null,
+      player.kickReturn         || null
     ]
   );
 };
 
+// =============================================
 // Process games and stats from Madden export
+// =============================================
 export const ingestGames = async (
-  leagueId: string,
-  scoresData: any[],
-  teamIdMap: Map<number, string>,
+  leagueId:    string,
+  scoresData:  any[],
+  teamIdMap:   Map<number, string>,
   playerIdMap: Map<number, string>
 ): Promise<{
-  created: number;
+  created:        number;
   statsProcessed: number;
 }> => {
-  let created = 0;
+  let created        = 0;
   let statsProcessed = 0;
 
   for (const score of scoresData) {
@@ -452,14 +490,13 @@ export const ingestGames = async (
 
     if (!homeTeamId || !awayTeamId) continue;
 
-    // Check if game already exists
     const existing = await query(
       `SELECT id FROM games
-       WHERE league_id = $1
-       AND home_team_id = $2
-       AND away_team_id = $3
-       AND week = $4
-       AND season = $5`,
+       WHERE league_id    = $1
+       AND home_team_id   = $2
+       AND away_team_id   = $3
+       AND week           = $4
+       AND season         = $5`,
       [
         leagueId,
         homeTeamId,
@@ -473,8 +510,6 @@ export const ingestGames = async (
 
     if (existing.rows.length > 0) {
       gameId = existing.rows[0].id;
-
-      // Update score
       await query(
         `UPDATE games SET
           home_score = $1,
@@ -483,7 +518,6 @@ export const ingestGames = async (
         [score.homeScore, score.awayScore, gameId]
       );
     } else {
-      // Create new game
       gameId = uuidv4();
 
       await query(
@@ -492,7 +526,7 @@ export const ingestGames = async (
           away_team_id, home_score, away_score,
           week, season, played_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
         [
           gameId,
           leagueId,
@@ -505,10 +539,9 @@ export const ingestGames = async (
         ]
       );
 
-      // Update team win/loss records
       if (score.homeScore > score.awayScore) {
         await query(
-          `UPDATE teams SET wins = wins + 1 WHERE id = $1`,
+          `UPDATE teams SET wins   = wins   + 1 WHERE id = $1`,
           [homeTeamId]
         );
         await query(
@@ -517,7 +550,7 @@ export const ingestGames = async (
         );
       } else if (score.awayScore > score.homeScore) {
         await query(
-          `UPDATE teams SET wins = wins + 1 WHERE id = $1`,
+          `UPDATE teams SET wins   = wins   + 1 WHERE id = $1`,
           [awayTeamId]
         );
         await query(
@@ -529,11 +562,10 @@ export const ingestGames = async (
       created++;
     }
 
-    // Process player stats for this game
     if (score.playerStats && score.playerStats.length > 0) {
       for (const stat of score.playerStats) {
         const playerId = playerIdMap.get(stat.rosterId);
-        const teamId = teamIdMap.get(stat.teamId);
+        const teamId   = teamIdMap.get(stat.teamId);
 
         if (!playerId || !teamId) continue;
 
@@ -549,11 +581,11 @@ export const ingestGames = async (
             sacks, forced_fumbles
           )
           VALUES (
-            $1, $2, $3, $4,
-            $5, $6, $7, $8,
-            $9, $10, $11, $12,
-            $13, $14, $15, $16,
-            $17, $18
+            $1,$2,$3,$4,
+            $5,$6,$7,$8,
+            $9,$10,$11,$12,
+            $13,$14,$15,$16,
+            $17,$18
           )
           ON CONFLICT (game_id, player_id)
           DO UPDATE SET

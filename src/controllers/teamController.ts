@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
+import { query } from '../config/database';
 import {
   createTeam,
   getTeamsByLeague,
@@ -21,10 +22,10 @@ export const create = async (
 ): Promise<void> => {
   try {
     const leagueId = req.params.leagueId as string;
-    const { 
-      name, 
-      abbreviation, 
-      city, 
+    const {
+      name,
+      abbreviation,
+      city,
       overall_rating,
       team_logo_url,
       primary_color,
@@ -32,7 +33,6 @@ export const create = async (
     } = req.body;
     const owner_id = req.user!.id;
 
-    // Validate required fields
     if (!name || !abbreviation || !city) {
       res.status(400).json({
         success: false,
@@ -41,7 +41,6 @@ export const create = async (
       return;
     }
 
-    // Abbreviation should be 2-4 characters
     if (abbreviation.length < 2 || abbreviation.length > 4) {
       res.status(400).json({
         success: false,
@@ -87,7 +86,7 @@ export const getAll = async (
 ): Promise<void> => {
   try {
     const leagueId = req.params.leagueId as string;
-    const teams = await getTeamsByLeague(leagueId);
+    const teams    = await getTeamsByLeague(leagueId);
 
     res.status(200).json({
       success: true,
@@ -113,9 +112,7 @@ export const getOne = async (
   res: Response
 ): Promise<void> => {
   try {
-    const id = req.params.id as string;
-
-    // Get team with full roster
+    const id   = req.params.id as string;
     const team = await getTeamWithRoster(id);
 
     if (!team) {
@@ -149,12 +146,12 @@ export const standings = async (
   res: Response
 ): Promise<void> => {
   try {
-    const leagueId = req.params.leagueId as string;
+    const leagueId     = req.params.leagueId as string;
     const standingsData = await getStandings(leagueId);
 
     res.status(200).json({
       success: true,
-      count: standingsData.length,
+      count:     standingsData.length,
       standings: standingsData
     });
 
@@ -177,12 +174,12 @@ export const update = async (
 ): Promise<void> => {
   try {
     const id = req.params.id as string;
-    const { 
-      name, 
-      abbreviation, 
-      city, 
-      overall_rating, 
-      wins, 
+    const {
+      name,
+      abbreviation,
+      city,
+      overall_rating,
+      wins,
       losses,
       team_logo_url,
       primary_color,
@@ -190,7 +187,6 @@ export const update = async (
     } = req.body;
     const userId = req.user!.id;
 
-    // Verify ownership
     const owns = await isTeamOwner(id, userId);
     if (!owns) {
       res.status(403).json({
@@ -244,10 +240,9 @@ export const remove = async (
   res: Response
 ): Promise<void> => {
   try {
-    const id = req.params.id as string;
+    const id     = req.params.id as string;
     const userId = req.user!.id;
 
-    // Verify ownership
     const owns = await isTeamOwner(id, userId);
     if (!owns) {
       res.status(403).json({
@@ -277,6 +272,77 @@ export const remove = async (
     res.status(500).json({
       success: false,
       message: 'Server error deleting team'
+    });
+  }
+};
+
+// =============================================
+// ASSIGN DIVISION
+// PUT /api/leagues/:leagueId/teams/:id/division
+// Commissioner assigns division to custom team
+// =============================================
+export const assignDivision = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const teamId   = req.params.id       as string;
+    const leagueId = req.params.leagueId as string;
+    const { conference, division } = req.body;
+
+    const validConferences = ['AFC', 'NFC'];
+    const validDivisions   = [
+      'AFC East', 'AFC North', 'AFC South', 'AFC West',
+      'NFC East', 'NFC North', 'NFC South', 'NFC West'
+    ];
+
+    if (!validConferences.includes(conference)) {
+      res.status(400).json({
+        success: false,
+        message: 'Conference must be AFC or NFC',
+        valid:   validConferences
+      });
+      return;
+    }
+
+    if (!validDivisions.includes(division)) {
+      res.status(400).json({
+        success: false,
+        message: 'Invalid division',
+        valid:   validDivisions
+      });
+      return;
+    }
+
+    const result = await query(
+      `UPDATE teams
+       SET conference = $1,
+           division   = $2
+       WHERE id        = $3
+       AND league_id   = $4
+       RETURNING *`,
+      [conference, division, teamId, leagueId]
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({
+        success: false,
+        message: 'Team not found'
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Team assigned to ${division}`,
+      team:    result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Assign division error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error assigning division'
     });
   }
 };

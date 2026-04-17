@@ -5,7 +5,8 @@ import {
   getOne,
   update,
   remove,
-  standings
+  standings,
+  assignDivision
 } from '../controllers/teamController';
 import { protect } from '../middleware/authMiddleware';
 
@@ -34,5 +35,8 @@ router.put('/:id', update);
 
 // DELETE /api/leagues/:leagueId/teams/:id
 router.delete('/:id', remove);
+
+// PUT /api/leagues/:leagueId/teams/:id/division
+router.put('/:id/division', assignDivision);
 
 export default router;

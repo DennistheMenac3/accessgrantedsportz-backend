@@ -9,15 +9,15 @@ import pool from './config/database';
 dotenv.config();
 
 // Import routes
-import authRoutes      from './routes/authRoutes';
-import leagueRoutes    from './routes/leagueRoutes';
-import teamRoutes      from './routes/teamRoutes';
-import playerRoutes    from './routes/playerRoutes';
-import gameRoutes      from './routes/gameRoutes';
-import ingestionRoutes from './routes/ingestionRoutes';
-import tradeRoutes     from './routes/tradeRoutes';
-import awardsRoutes    from './routes/awardsRoutes';
-import storylineRoutes from './routes/storylineRoutes';
+import authRoutes         from './routes/authRoutes';
+import leagueRoutes       from './routes/leagueRoutes';
+import teamRoutes         from './routes/teamRoutes';
+import playerRoutes       from './routes/playerRoutes';
+import gameRoutes         from './routes/gameRoutes';
+import ingestionRoutes    from './routes/ingestionRoutes';
+import tradeRoutes        from './routes/tradeRoutes';
+import awardsRoutes       from './routes/awardsRoutes';
+import storylineRoutes    from './routes/storylineRoutes';
 import inviteRoutes       from './routes/inviteRoutes';
 import leagueInviteRoutes from './routes/leagueInviteRoutes';
 
@@ -34,7 +34,10 @@ import { data as compareCmd,    execute as compareExec    } from './discord/comm
 import { data as awardsCmd,     execute as awardsExec     } from './discord/commands/awards';
 import { data as recapCmd,      execute as recapExec      } from './discord/commands/recap';
 import { data as tradecheckCmd, execute as tradecheckExec } from './discord/commands/tradecheck';
-import { data as inviteCmd, execute as inviteExec } from './discord/commands/invite';
+import { data as inviteCmd,     execute as inviteExec     } from './discord/commands/invite';
+
+// Import Scheduler
+import { startScheduler } from './services/schedulerService';
 
 const app: Application = express();
 const PORT = process.env.PORT || 3000;
@@ -67,18 +70,18 @@ app.get('/', async (req: Request, res: Response) => {
 });
 
 // API Routes
-app.use('/api/auth',                          authRoutes);
-app.use('/api/leagues',                       leagueRoutes);
-app.use('/api/leagues/:leagueId/teams',       teamRoutes);
-app.use('/api/leagues/:leagueId/players',     playerRoutes);
-app.use('/api/leagues/:leagueId/games',       gameRoutes);
-app.use('/api/leagues/:leagueId/trades',      tradeRoutes);
-app.use('/api/leagues/:leagueId/awards',      awardsRoutes);
-app.use('/api/ingest',                        ingestionRoutes);
-app.use('/api/leagues/:leagueId/storylines',  storylineRoutes);
-app.use('/api/invites',                        inviteRoutes);
-app.use('/api/leagues/:leagueId/invites',      leagueInviteRoutes);
-app.use('/api/leagues/:leagueId/members',      leagueInviteRoutes);
+app.use('/api/auth',                         authRoutes);
+app.use('/api/leagues',                      leagueRoutes);
+app.use('/api/leagues/:leagueId/teams',      teamRoutes);
+app.use('/api/leagues/:leagueId/players',    playerRoutes);
+app.use('/api/leagues/:leagueId/games',      gameRoutes);
+app.use('/api/leagues/:leagueId/trades',     tradeRoutes);
+app.use('/api/leagues/:leagueId/awards',     awardsRoutes);
+app.use('/api/ingest',                       ingestionRoutes);
+app.use('/api/leagues/:leagueId/storylines', storylineRoutes);
+app.use('/api/invites',                      inviteRoutes);
+app.use('/api/leagues/:leagueId/invites',    leagueInviteRoutes);
+app.use('/api/leagues/:leagueId/members',    leagueInviteRoutes);
 
 // Register all Discord commands
 commands.set(rankingsCmd.name,   { execute: rankingsExec });
@@ -92,7 +95,10 @@ commands.set(compareCmd.name,    { execute: compareExec });
 commands.set(awardsCmd.name,     { execute: awardsExec });
 commands.set(recapCmd.name,      { execute: recapExec });
 commands.set(tradecheckCmd.name, { execute: tradecheckExec });
-commands.set(inviteCmd.name, { execute: inviteExec });
+commands.set(inviteCmd.name,     { execute: inviteExec });
+
+// Start scheduler
+startScheduler();
 
 // Start Discord bot
 if (process.env.DISCORD_BOT_TOKEN) {
@@ -113,8 +119,8 @@ app.listen(PORT, () => {
   console.log(`📡 Awards routes:     /api/leagues/:leagueId/awards`);
   console.log(`📡 Ingestion routes:  /api/ingest/madden/:leagueId`);
   console.log(`📡 Storyline routes:  /api/leagues/:leagueId/storylines`);
-  console.log(`🤖 Discord:          /rankings /rumors /scout /standings /gems /leaders /value /compare /awards /recap /tradecheck`);
   console.log(`📡 Invite routes:     /api/invites, /api/leagues/:leagueId/invites`);
+  console.log(`🤖 Discord:          /rankings /rumors /scout /standings /gems /leaders /value /compare /awards /recap /tradecheck /invite`);
 });
 
 export default app;

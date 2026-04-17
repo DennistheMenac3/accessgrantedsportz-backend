@@ -39,24 +39,38 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
   const command = commands.get(interaction.commandName);
 
   if (!command) {
-    console.error(`No command matching ${interaction.commandName} was found.`);
+    console.error(
+      `No command matching ${interaction.commandName} was found.`
+    );
     return;
   }
 
   try {
     await command.execute(interaction);
-  } catch (error) {
+  } catch (error: any) {
     console.error(`Error executing ${interaction.commandName}:`, error);
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({
-        content: '❌ There was an error executing this command.',
-        ephemeral: true
-      });
-    } else {
-      await interaction.reply({
-        content: '❌ There was an error executing this command.',
-        ephemeral: true
-      });
+
+    // Interaction expired — nothing we can do
+    if (error.code === 10062) return;
+
+    // Already acknowledged — nothing we can do
+    if (error.code === 40060) return;
+
+    try {
+      const msg = '❌ There was an error executing this command.';
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({
+          content:   msg,
+          ephemeral: true
+        });
+      } else {
+        await interaction.reply({
+          content:   msg,
+          ephemeral: true
+        });
+      }
+    } catch {
+      // Silently ignore — interaction already gone
     }
   }
 });
