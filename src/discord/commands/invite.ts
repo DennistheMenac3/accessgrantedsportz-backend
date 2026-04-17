@@ -82,8 +82,8 @@ export const execute = async (
       ]
     );
 
-    const baseUrl   = process.env.FRONTEND_URL || 'https://accessgrantedsportz.com';
-    const inviteUrl = `${baseUrl}/join/${inviteCode}`;
+    const frontendUrl = process.env.FRONTEND_URL || 'https://accessgrantedsportz.com';
+    const inviteUrl   = `${frontendUrl}/invite/${inviteCode}`;
 
     let response = `🎟️ **League Invite Created!**\n\n`;
     response += `**League:** ${league.name}\n`;
