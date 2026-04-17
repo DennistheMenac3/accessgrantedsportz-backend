@@ -65,8 +65,6 @@ export const execute = async (
     const requestingName = interaction.options.getString('requesting', true);
 
     const findPlayer = async (name: string) => {
-      const [first, ...lastParts] = name.split(' ');
-      const last = lastParts.join(' ');
       const result = await query(
         `SELECT
           p.id, p.first_name, p.last_name,
@@ -76,9 +74,14 @@ export const execute = async (
          FROM players p
          LEFT JOIN teams t ON t.id = p.team_id
          WHERE p.league_id = $1
-         AND LOWER(p.first_name) = LOWER($2)
-         AND LOWER(p.last_name)  = LOWER($3)`,
-        [league.id, first, last]
+         AND (
+           LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER($2)
+           OR LOWER(p.first_name) LIKE LOWER($2)
+           OR LOWER(p.last_name) LIKE LOWER($2)
+           OR LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER('%' || $2 || '%')
+         )
+         LIMIT 1`,
+        [league.id, name]
       );
       return result.rows[0] || null;
     };
@@ -122,7 +125,7 @@ export const execute = async (
       'You\'re stealing. Do this immediately!';
 
     const whoWins =
-      absDiff <= 10  ? 'Neither side'                                         :
+      absDiff <= 10  ? 'Neither side'                                :
       difference > 0 ? `${requested.first_name} ${requested.last_name}'s team` :
       `${offered.first_name} ${offered.last_name}'s team`;
 

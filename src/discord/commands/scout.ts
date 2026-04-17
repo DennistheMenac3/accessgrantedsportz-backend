@@ -43,16 +43,19 @@ export const execute = async (
     }
 
     const playerName = interaction.options.getString('player', true);
-    const [firstName, ...lastNameParts] = playerName.split(' ');
-    const lastName = lastNameParts.join(' ');
 
     // Find the player
     const playerResult = await query(
       `SELECT id FROM players
        WHERE league_id = $1
-       AND LOWER(first_name) = LOWER($2)
-       AND LOWER(last_name) = LOWER($3)`,
-      [league.id, firstName, lastName]
+       AND (
+         LOWER(first_name || ' ' || last_name) LIKE LOWER($2)
+         OR LOWER(first_name) LIKE LOWER($2)
+         OR LOWER(last_name) LIKE LOWER($2)
+         OR LOWER(first_name || ' ' || last_name) LIKE LOWER('%' || $2 || '%')
+       )
+       LIMIT 1`,
+      [league.id, playerName]
     );
 
     if (playerResult.rows.length === 0) {

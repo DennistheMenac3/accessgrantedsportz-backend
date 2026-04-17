@@ -50,8 +50,6 @@ export const execute = async (
     const name2 = interaction.options.getString('player2', true);
 
     const findPlayer = async (name: string) => {
-      const [first, ...lastParts] = name.split(' ');
-      const last = lastParts.join(' ');
       const result = await query(
         `SELECT
           p.id, p.first_name, p.last_name,
@@ -66,11 +64,15 @@ export const execute = async (
            ON tvh.player_id = p.id
            AND tvh.league_id = p.league_id
          WHERE p.league_id = $1
-         AND LOWER(p.first_name) = LOWER($2)
-         AND LOWER(p.last_name)  = LOWER($3)
+         AND (
+           LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER($2)
+           OR LOWER(p.first_name) LIKE LOWER($2)
+           OR LOWER(p.last_name) LIKE LOWER($2)
+           OR LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER('%' || $2 || '%')
+         )
          ORDER BY tvh.calculated_at DESC
          LIMIT 1`,
-        [league.id, first, last]
+        [league.id, name]
       );
       return result.rows[0] || null;
     };
