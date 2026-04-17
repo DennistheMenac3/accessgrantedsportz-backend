@@ -7,14 +7,14 @@ import { v4 as uuidv4 } from 'uuid';
 // Value drops sharply after 30
 // =============================================
 const getAgeCurveMultiplier = (age: number): number => {
-  if (age <= 21) return 0.75;
-  if (age === 22) return 0.82;
-  if (age === 23) return 0.88;
-  if (age === 24) return 0.94;
-  if (age === 25) return 1.00;
-  if (age === 26) return 1.00;
-  if (age === 27) return 0.98;
-  if (age === 28) return 0.94;
+  if (age <= 21) return 1.30;
+  if (age === 22) return 1.25;
+  if (age === 23) return 1.20;
+  if (age === 24) return 1.15;
+  if (age === 25) return 1.10;
+  if (age === 26) return 1.05;
+  if (age === 27) return 1.00;
+  if (age === 28) return 0.95;
   if (age === 29) return 0.88;
   if (age === 30) return 0.80;
   if (age === 31) return 0.70;
