@@ -123,7 +123,7 @@ export const execute = async (
       response += '\n';
     });
 
-    response += `*Use /recap for AI-generated game recaps*\n`;
+    response += `*Use /recap for detailed game recaps*\n`;
     response += `*Powered by AccessGrantedSportz*`;
 
     await interaction.editReply(response);
