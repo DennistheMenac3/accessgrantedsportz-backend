@@ -35,6 +35,7 @@ import { data as awardsCmd,     execute as awardsExec     } from './discord/comm
 import { data as recapCmd,      execute as recapExec      } from './discord/commands/recap';
 import { data as tradecheckCmd, execute as tradecheckExec } from './discord/commands/tradecheck';
 import { data as inviteCmd,     execute as inviteExec     } from './discord/commands/invite';
+import { data as scoresCmd, execute as scoresExec } from './discord/commands/scores';
 
 // Import Scheduler
 import { startScheduler } from './services/schedulerService';
@@ -96,6 +97,7 @@ commands.set(awardsCmd.name,     { execute: awardsExec });
 commands.set(recapCmd.name,      { execute: recapExec });
 commands.set(tradecheckCmd.name, { execute: tradecheckExec });
 commands.set(inviteCmd.name,     { execute: inviteExec });
+commands.set(scoresCmd.name, { execute: scoresExec });
 
 // Start scheduler
 startScheduler();
@@ -120,7 +122,8 @@ app.listen(PORT, () => {
   console.log(`📡 Ingestion routes:  /api/ingest/madden/:leagueId`);
   console.log(`📡 Storyline routes:  /api/leagues/:leagueId/storylines`);
   console.log(`📡 Invite routes:     /api/invites, /api/leagues/:leagueId/invites`);
-  console.log(`🤖 Discord:          /rankings /rumors /scout /standings /gems /leaders /value /compare /awards /recap /tradecheck /invite`);
+  console.log(`🤖 Discord: /rankings /rumors /scout /standings /gems /leaders /value /compare /awards /recap /scores /tradecheck /invite`);
+  
 });
 
 export default app;
