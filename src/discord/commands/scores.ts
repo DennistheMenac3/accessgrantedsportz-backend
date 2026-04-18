@@ -66,28 +66,30 @@ export const execute = async (
 
     // Get all games for that week
     const gamesResult = await query(
-      `SELECT g.*,
-        ht.name         as home_team,
-        ht.abbreviation as home_abbr,
-        ht.wins         as home_wins,
-        ht.losses       as home_losses,
-        hu.username     as home_owner,
-        at.name         as away_team,
-        at.abbreviation as away_abbr,
-        at.wins         as away_wins,
-        at.losses       as away_losses,
-        au.username     as away_owner
-       FROM games g
-       JOIN teams ht ON ht.id = g.home_team_id
-       JOIN teams at ON at.id = g.away_team_id
-       LEFT JOIN users hu ON hu.id = ht.owner_id
-       LEFT JOIN users au ON au.id = at.owner_id
-       WHERE g.league_id = $1
-       AND g.season = $2
-       AND g.week = $3
-       ORDER BY g.home_score + g.away_score DESC`,
-      [league.id, league.current_season, weekNum]
-    );
+  `SELECT g.*,
+    ht.name         as home_team,
+    ht.abbreviation as home_abbr,
+    ht.wins         as home_wins,
+    ht.losses       as home_losses,
+    hu.username     as home_owner,
+    hu.discord_user_id as home_discord_id,
+    at.name         as away_team,
+    at.abbreviation as away_abbr,
+    at.wins         as away_wins,
+    at.losses       as away_losses,
+    au.username     as away_owner,
+    au.discord_user_id as away_discord_id
+   FROM games g
+   JOIN teams ht ON ht.id = g.home_team_id
+   JOIN teams at ON at.id = g.away_team_id
+   LEFT JOIN users hu ON hu.id = ht.owner_id
+   LEFT JOIN users au ON au.id = at.owner_id
+   WHERE g.league_id = $1
+   AND g.season = $2
+   AND g.week = $3
+   ORDER BY g.home_score + g.away_score DESC`,
+  [league.id, league.current_season, weekNum]
+);
 
     if (gamesResult.rows.length === 0) {
       await interaction.editReply(
@@ -114,11 +116,17 @@ export const execute = async (
         `${homeWon ? ' 🏆' : ''}` +
         `${tie ? ' 🤝' : ''}\n`;
 
-      if (game.away_owner && game.home_owner && 
-    game.away_owner !== game.home_owner) {
-  response +=
-    `@${game.away_owner} vs @${game.home_owner}\n`;
-    }
+      const awayTag = game.away_discord_id 
+  ? `<@${game.away_discord_id}>` 
+  : game.away_owner ? `@${game.away_owner}` : null;
+
+const homeTag = game.home_discord_id
+  ? `<@${game.home_discord_id}>`
+  : game.home_owner ? `@${game.home_owner}` : null;
+
+if (awayTag && homeTag && awayTag !== homeTag) {
+  response += `${awayTag} vs ${homeTag}\n`;
+}
 
       response += '\n';
     });
