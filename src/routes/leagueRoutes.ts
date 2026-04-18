@@ -7,11 +7,10 @@ import {
   remove 
 } from '../controllers/leagueController';
 import { protect } from '../middleware/authMiddleware';
+import { query } from '../config/database';
 
 const router = Router();
 
-// All league routes are protected
-// protect middleware runs before every route
 router.use(protect);
 
 // POST /api/leagues
@@ -20,18 +19,9 @@ router.post('/', create);
 // GET /api/leagues
 router.get('/', getAll);
 
-// GET /api/leagues/:id
-router.get('/:id', getOne);
-
-// PUT /api/leagues/:id
-router.put('/:id', update);
-
-// DELETE /api/leagues/:id
-router.delete('/:id', remove);
-
 // GET /api/leagues/:id/export-url
-// Commissioner gets their Madden Companion App export URL
-router.get('/:id/export-url', protect, async (req: any, res: any) => {
+// Must be before /:id route to avoid conflict
+router.get('/:id/export-url', async (req: any, res: any) => {
   try {
     const leagueId = req.params.id;
     const userId   = req.user.id;
@@ -50,16 +40,16 @@ router.get('/:id/export-url', protect, async (req: any, res: any) => {
       return;
     }
 
-    const league    = result.rows[0];
-    const baseUrl   = 'https://accessgrantedsportz-backend-production.up.railway.app';
-    const key       = league.api_key;
+    const league  = result.rows[0];
+    const baseUrl = 'https://accessgrantedsportz-backend-production.up.railway.app';
+    const key     = league.api_key;
 
     res.status(200).json({
       success: true,
       urls: {
-        league_info: `${baseUrl}/api/ingest/madden/${leagueId}/leagueinfo?key=${key}`,
-        rosters:     `${baseUrl}/api/ingest/madden/${leagueId}/rosters?key=${key}`,
-        weekly_stats:`${baseUrl}/api/ingest/madden/${leagueId}/week?key=${key}`
+        league_info:  `${baseUrl}/api/ingest/madden/${leagueId}/leagueinfo?key=${key}`,
+        rosters:      `${baseUrl}/api/ingest/madden/${leagueId}/rosters?key=${key}`,
+        weekly_stats: `${baseUrl}/api/ingest/madden/${leagueId}/week?key=${key}`
       },
       instructions: [
         '1. Open Madden Companion App',
@@ -79,5 +69,14 @@ router.get('/:id/export-url', protect, async (req: any, res: any) => {
     });
   }
 });
+
+// GET /api/leagues/:id
+router.get('/:id', getOne);
+
+// PUT /api/leagues/:id
+router.put('/:id', update);
+
+// DELETE /api/leagues/:id
+router.delete('/:id', remove);
 
 export default router;
