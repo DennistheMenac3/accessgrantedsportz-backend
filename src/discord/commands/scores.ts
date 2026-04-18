@@ -114,10 +114,11 @@ export const execute = async (
         `${homeWon ? ' 🏆' : ''}` +
         `${tie ? ' 🤝' : ''}\n`;
 
-      if (game.away_owner || game.home_owner) {
-        response +=
-          `@${game.away_owner || 'CPU'} vs @${game.home_owner || 'CPU'}\n`;
-      }
+      if (game.away_owner && game.home_owner && 
+    game.away_owner !== game.home_owner) {
+  response +=
+    `@${game.away_owner} vs @${game.home_owner}\n`;
+    }
 
       response += '\n';
     });
