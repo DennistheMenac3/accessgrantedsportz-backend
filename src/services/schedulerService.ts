@@ -313,18 +313,18 @@ export const startScheduler = (): void => {
 
     for (const league of leagues) {
       // Find games from last 24 hours with no recap
-      const unrecappedGames = await query(
-        `SELECT g.id
-         FROM games g
-         WHERE g.league_id = $1
-         AND g.season = $2
-         AND g.created_at > NOW() - INTERVAL '24 hours'
-         AND NOT EXISTS (
-           SELECT 1 FROM storylines s
-           WHERE s.league_id = g.league_id
-           AND s.storyline_type = 'game_recap'
-           AND s.metadata->>'game_id' = g.id::text
-         )`,
+     const unrecappedGames = await query(
+  `SELECT g.id
+   FROM games g
+   WHERE g.league_id = $1
+   AND g.season = $2
+   AND g.week = (SELECT MAX(week) FROM games WHERE league_id = $1)
+   AND NOT EXISTS (
+     SELECT 1 FROM storylines s
+     WHERE s.league_id = g.league_id
+     AND s.storyline_type = 'game_recap'
+     AND s.metadata->>'game_id' = g.id::text
+   )`,
         [league.id, league.current_season]
       );
 
