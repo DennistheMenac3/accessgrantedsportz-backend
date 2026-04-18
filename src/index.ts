@@ -36,6 +36,9 @@ import { data as recapCmd,      execute as recapExec      } from './discord/comm
 import { data as tradecheckCmd, execute as tradecheckExec } from './discord/commands/tradecheck';
 import { data as inviteCmd,     execute as inviteExec     } from './discord/commands/invite';
 import { data as scoresCmd, execute as scoresExec } from './discord/commands/scores';
+import { data as joinCmd,  execute as joinExec  } from './discord/commands/join';
+import { data as claimCmd, execute as claimExec } from './discord/commands/claim';
+import discordAuthRoutes from './routes/discordAuthRoutes';
 
 // Import Scheduler
 import { startScheduler } from './services/schedulerService';
@@ -83,6 +86,7 @@ app.use('/api/leagues/:leagueId/storylines', storylineRoutes);
 app.use('/api/invites',                      inviteRoutes);
 app.use('/api/leagues/:leagueId/invites',    leagueInviteRoutes);
 app.use('/api/leagues/:leagueId/members',    leagueInviteRoutes);
+app.use('/api/auth', discordAuthRoutes);
 
 // Register all Discord commands
 commands.set(rankingsCmd.name,   { execute: rankingsExec });
@@ -98,6 +102,8 @@ commands.set(recapCmd.name,      { execute: recapExec });
 commands.set(tradecheckCmd.name, { execute: tradecheckExec });
 commands.set(inviteCmd.name,     { execute: inviteExec });
 commands.set(scoresCmd.name, { execute: scoresExec });
+commands.set(joinCmd.name,  { execute: joinExec });
+commands.set(claimCmd.name, { execute: claimExec });
 
 // Start scheduler
 startScheduler();
