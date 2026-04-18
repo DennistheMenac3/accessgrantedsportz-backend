@@ -12,6 +12,7 @@ import { data as valueData }      from './commands/value';
 import { data as compareData }    from './commands/compare';
 import { data as awardsData }     from './commands/awards';
 import { data as recapData }      from './commands/recap';
+import { data as scoresData }     from './commands/scores';
 import { data as tradecheckData } from './commands/tradecheck';
 import { data as inviteData }     from './commands/invite';
 
@@ -26,6 +27,7 @@ const commands = [
   compareData.toJSON(),
   awardsData.toJSON(),
   recapData.toJSON(),
+  scoresData.toJSON(),
   tradecheckData.toJSON(),
   inviteData.toJSON()
 ];
@@ -39,12 +41,12 @@ const registerCommands = async () => {
     console.log('🔄 Registering Discord slash commands...');
 
     await rest.put(
-  Routes.applicationGuildCommands(
-    process.env.DISCORD_CLIENT_ID!,
-    '1261350703645982720'  // Your Discord server ID
-  ),
-  { body: commands }
-);
+      Routes.applicationGuildCommands(
+        process.env.DISCORD_CLIENT_ID!,
+        '1261350703645982720'
+      ),
+      { body: commands }
+    );
 
     console.log('✅ Successfully registered all slash commands!\n');
     console.log('📋 Commands registered:');
