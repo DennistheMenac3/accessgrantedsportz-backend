@@ -44,7 +44,9 @@ router.get('/discord/callback', async (req: any, res: any) => {
     const inviteCode = req.query.state as string;
 
     if (!code) {
-      res.redirect(`${FRONTEND_URL}/invite/${inviteCode}?error=cancelled`);
+      res.redirect(
+        `${FRONTEND_URL}/invite/${inviteCode}?error=cancelled`
+      );
       return;
     }
 
@@ -71,17 +73,17 @@ router.get('/discord/callback', async (req: any, res: any) => {
 
     const discordUser = userResponse.data;
 
-    // Check if user already exists
-    let userResult = await query(
+    let userId: string;
+
+    // Check if user already exists by Discord ID
+    const byDiscord = await query(
       `SELECT * FROM users WHERE discord_user_id = $1`,
       [discordUser.id]
     );
 
-    let userId: string;
-
-    if (userResult.rows.length > 0) {
-      // Update existing user
-      userId = userResult.rows[0].id;
+    if (byDiscord.rows.length > 0) {
+      // Existing Discord user — update username
+      userId = byDiscord.rows[0].id;
       await query(
         `UPDATE users SET
           discord_username = $1,
@@ -89,26 +91,47 @@ router.get('/discord/callback', async (req: any, res: any) => {
          WHERE id = $2`,
         [discordUser.username, userId]
       );
+
     } else {
-      // Create new user
-      userId = uuidv4();
-      await query(
-        `INSERT INTO users (
-          id, username, email,
-          password_hash,
-          discord_user_id,
-          discord_username
-        )
-        VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          userId,
-          discordUser.username,
-          discordUser.email || `${discordUser.id}@discord.ags`,
-          'discord_oauth',
-          discordUser.id,
-          discordUser.username
-        ]
+      // Check if user exists by email
+      const byEmail = await query(
+        `SELECT * FROM users WHERE email = $1`,
+        [discordUser.email]
       );
+
+      if (byEmail.rows.length > 0) {
+        // Link Discord to existing email account
+        userId = byEmail.rows[0].id;
+        await query(
+          `UPDATE users SET
+            discord_user_id  = $1,
+            discord_username = $2,
+            updated_at       = NOW()
+           WHERE id = $3`,
+          [discordUser.id, discordUser.username, userId]
+        );
+
+      } else {
+        // Create brand new user
+        userId = uuidv4();
+        await query(
+          `INSERT INTO users (
+            id, username, email,
+            password_hash,
+            discord_user_id,
+            discord_username
+          )
+          VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            userId,
+            discordUser.username,
+            discordUser.email || `${discordUser.id}@discord.ags`,
+            'discord_oauth',
+            discordUser.id,
+            discordUser.username
+          ]
+        );
+      }
     }
 
     // Generate JWT token
@@ -118,9 +141,11 @@ router.get('/discord/callback', async (req: any, res: any) => {
       { expiresIn: '30d' }
     );
 
+    console.log(`✅ Discord OAuth success for user: ${discordUser.username} (${userId})`);
+
     // Redirect back to invite page with token
     res.redirect(
-      `${FRONTEND_URL}/invite/${inviteCode}?token=${token}&discord_id=${discordUser.id}&username=${discordUser.username}`
+      `${FRONTEND_URL}/invite/${inviteCode}?token=${token}&username=${discordUser.username}`
     );
 
   } catch (error) {
