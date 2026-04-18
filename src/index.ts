@@ -20,6 +20,7 @@ import awardsRoutes       from './routes/awardsRoutes';
 import storylineRoutes    from './routes/storylineRoutes';
 import inviteRoutes       from './routes/inviteRoutes';
 import leagueInviteRoutes from './routes/leagueInviteRoutes';
+import discordAuthRoutes from './routes/discordAuthRoutes';
 
 // Import Discord bot
 import { startBot, commands } from './discord/bot';
@@ -38,7 +39,6 @@ import { data as inviteCmd,     execute as inviteExec     } from './discord/comm
 import { data as scoresCmd, execute as scoresExec } from './discord/commands/scores';
 import { data as joinCmd,  execute as joinExec  } from './discord/commands/join';
 import { data as claimCmd, execute as claimExec } from './discord/commands/claim';
-import discordAuthRoutes from './routes/discordAuthRoutes';
 
 // Import Scheduler
 import { startScheduler } from './services/schedulerService';
