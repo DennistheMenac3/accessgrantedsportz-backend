@@ -3,6 +3,7 @@ import {
   ChatInputCommandInteraction
 } from 'discord.js';
 import { query } from '../../config/database';
+import { COLORS, createEmbed } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -35,7 +36,11 @@ export const execute = async (
   try {
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
-      await interaction.editReply('❌ No league connected.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ No League Connected')
+          .setDescription('No league is connected to this server.')]
+      });
       return;
     }
 
@@ -46,21 +51,22 @@ export const execute = async (
         p.first_name, p.last_name,
         p.position, p.overall_rating,
         p.age, p.dev_trait, p.speed,
-        t.name as team_name,
+        t.name         as team_name,
+        t.abbreviation as team_abbr,
         t.wins, t.losses,
-        COALESCE(tvh.total_value, 0)      as trade_value,
+        COALESCE(tvh.total_value, 0) as trade_value,
         tvh.value_breakdown,
         tvh.calculated_at
        FROM players p
        LEFT JOIN teams t ON t.id = p.team_id
        LEFT JOIN trade_value_history tvh
-         ON tvh.player_id = p.id
+         ON tvh.player_id  = p.id
          AND tvh.league_id = p.league_id
        WHERE p.league_id = $1
        AND (
          LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER($2)
          OR LOWER(p.first_name) LIKE LOWER($2)
-         OR LOWER(p.last_name) LIKE LOWER($2)
+         OR LOWER(p.last_name)  LIKE LOWER($2)
          OR LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER('%' || $2 || '%')
        )
        ORDER BY tvh.calculated_at DESC
@@ -69,7 +75,11 @@ export const execute = async (
     );
 
     if (result.rows.length === 0) {
-      await interaction.editReply(`❌ Player "${playerName}" not found.`);
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Player Not Found')
+          .setDescription(`Player "${playerName}" not found in your league.`)]
+      });
       return;
     }
 
@@ -78,38 +88,87 @@ export const execute = async (
     const breakdown  = player.value_breakdown || {};
 
     const devLabel =
-      player.dev_trait === 'xfactor'   ? '⚡ X-Factor'  :
-      player.dev_trait === 'superstar' ? '⭐ Superstar'  :
-      player.dev_trait === 'star'      ? '🌟 Star'       : '📋 Normal';
+      player.dev_trait === 'xfactor'   ? '⚡ XFactor'  :
+      player.dev_trait === 'superstar' ? '⭐ Superstar' :
+      player.dev_trait === 'star'      ? '🌟 Star'      : '📋 Normal';
 
-    let response = `💰 **TRADE VALUE REPORT** | AccessGrantedSportz\n`;
-    response += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-    response += `**${player.first_name} ${player.last_name}**\n`;
-    response += `${player.position} | ${player.team_name} (${player.wins}-${player.losses})\n`;
-    response += `OVR: ${player.overall_rating} | Age: ${player.age} | Spd: ${player.speed}\n`;
-    response += `${devLabel}\n\n`;
-    response += `💎 **TRADE VALUE SCORE: ${tradeValue.toFixed(1)}**\n\n`;
+    // Color based on trade value tier
+    const valueColor =
+      tradeValue >= 200 ? COLORS.GOLD    :
+      tradeValue >= 150 ? COLORS.ORANGE  :
+      tradeValue >= 100 ? COLORS.NAVY    :
+      tradeValue >= 50  ? COLORS.NAVY    :
+      COLORS.DANGER;
 
+    const valueTier =
+      tradeValue >= 200 ? '👑 ELITE'         :
+      tradeValue >= 150 ? '💎 FRANCHISE'      :
+      tradeValue >= 100 ? '⭐ PREMIUM'        :
+      tradeValue >= 50  ? '✅ SOLID STARTER'  :
+      '📋 DEPTH';
+
+    const embed = createEmbed(valueColor)
+      .setTitle(
+        `💰 ${player.first_name} ${player.last_name} | Trade Value Report`
+      )
+      .setDescription(
+        `${player.position} | ${player.team_name} ` +
+        `(${player.wins}-${player.losses})\n` +
+        `${devLabel} | ${valueTier}`
+      )
+      .addFields(
+        {
+          name:   '📊 Player Info',
+          value:
+            `**Overall:** ${player.overall_rating}\n` +
+            `**Age:** ${player.age}\n` +
+            `**Speed:** ${player.speed}\n` +
+            `**Dev Trait:** ${devLabel}`,
+          inline: true
+        },
+        {
+          name:   '💰 Trade Value',
+          value:
+            `**TVS: ${tradeValue.toFixed(1)}**\n` +
+            `Tier: ${valueTier}`,
+          inline: true
+        }
+      );
+
+    // Add breakdown if available
     if (breakdown && Object.keys(breakdown).length > 0) {
-      response += `**Breakdown:**\n`;
-      response += `📊 Base Value:     ${breakdown.base_value || 0}\n`;
-      response += `⚡ Speed Bonus:    ${breakdown.speed_bonus || 0}\n`;
-      response += `🧬 Dev/Age Bonus:  ${breakdown.dev_trait_age_bonus || 0}\n`;
-      response += `🏋️ Trait Bonus:    ${breakdown.trait_bonus || 0}\n`;
-      response += `🏆 Award Bonus:    ${breakdown.award_bonus || 0}\n`;
-      response += `📈 Trend Bonus:    ${breakdown.trend_bonus || 0}\n\n`;
-      response += `**Multipliers:**\n`;
-      response += `📅 Age:      ${breakdown.age_multiplier || 1}x\n`;
-      response += `🏈 Position: ${breakdown.position_multiplier || 1}x\n`;
-      response += `⚡ Dev:      ${breakdown.dev_trait_multiplier || 1}x\n`;
+      embed.addFields(
+        {
+          name:
+            '📈 Value Breakdown',
+          value:
+            `📊 Base Value:    **${breakdown.base_value      || 0}**\n` +
+            `⚡ Speed Bonus:   **${breakdown.speed_bonus     || 0}**\n` +
+            `🧬 Dev/Age Bonus: **${breakdown.dev_trait_age_bonus || 0}**\n` +
+            `🏋️ Trait Bonus:   **${breakdown.trait_bonus     || 0}**\n` +
+            `🏆 Award Bonus:   **${breakdown.award_bonus     || 0}**\n` +
+            `📈 Trend Bonus:   **${breakdown.trend_bonus     || 0}**`,
+          inline: true
+        },
+        {
+          name:   '✖️ Multipliers',
+          value:
+            `📅 Age:      **${breakdown.age_multiplier       || 1}x**\n` +
+            `🏈 Position: **${breakdown.position_multiplier  || 1}x**\n` +
+            `⚡ Dev:      **${breakdown.dev_trait_multiplier || 1}x**`,
+          inline: true
+        }
+      );
     }
 
-    response += `\n*Powered by AccessGrantedSportz Trade Engine*`;
-
-    await interaction.editReply(response);
+    await interaction.editReply({ embeds: [embed] });
 
   } catch (error) {
     console.error('Value error:', error);
-    await interaction.editReply('❌ Error fetching trade value.');
+    await interaction.editReply({
+      embeds: [createEmbed(COLORS.DANGER)
+        .setTitle('❌ Error')
+        .setDescription('Error fetching trade value. Please try again.')]
+    });
   }
 };

@@ -4,6 +4,7 @@ import {
 } from 'discord.js';
 import { query } from '../../config/database';
 import { getLeagueForServer } from '../helpers';
+import { COLORS, createEmbed } from '../../config/brand';
 
 export const data = new SlashCommandBuilder()
   .setName('leaders')
@@ -14,13 +15,13 @@ export const data = new SlashCommandBuilder()
       .setDescription('Which stat to show')
       .setRequired(true)
       .addChoices(
-        { name: '🏈 Passing Yards',    value: 'pass_yards' },
-        { name: '🏃 Rushing Yards',    value: 'rush_yards' },
-        { name: '🙌 Receiving Yards',  value: 'receiving_yards' },
-        { name: '💨 Sacks',            value: 'sacks' },
-        { name: '🎯 Interceptions',    value: 'interceptions' },
-        { name: '🏆 Touchdowns',       value: 'touchdowns' },
-        { name: '🤜 Tackles',          value: 'tackles' }
+        { name: '🏈 Passing Yards',   value: 'pass_yards' },
+        { name: '🏃 Rushing Yards',   value: 'rush_yards' },
+        { name: '🙌 Receiving Yards', value: 'receiving_yards' },
+        { name: '💨 Sacks',           value: 'sacks' },
+        { name: '🎯 Interceptions',   value: 'interceptions' },
+        { name: '🏆 Touchdowns',      value: 'touchdowns' },
+        { name: '🤜 Tackles',         value: 'tackles' }
       )
   );
 
@@ -32,14 +33,17 @@ export const execute = async (
   try {
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
-      await interaction.editReply('❌ No league connected to this server.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ No League Connected')
+          .setDescription('No league is connected to this server.')]
+      });
       return;
     }
 
     const stat = interaction.options.getString('stat', true);
 
-    // Build query based on stat
-    let statLabel = '';
+    let statLabel  = '';
     let selectStat = '';
     let positions  = '';
     let emoji      = '';
@@ -77,7 +81,9 @@ export const execute = async (
         break;
       case 'touchdowns':
         statLabel  = 'Total Touchdowns';
-        selectStat = `SUM(gs.pass_touchdowns + gs.rush_touchdowns + gs.receiving_touchdowns) as stat_total`;
+        selectStat =
+          `SUM(gs.pass_touchdowns + gs.rush_touchdowns + ` +
+          `gs.receiving_touchdowns) as stat_total`;
         positions  = '';
         emoji      = '🏆';
         break;
@@ -94,16 +100,16 @@ export const execute = async (
         p.first_name, p.last_name,
         p.position, p.overall_rating,
         p.dev_trait,
-        t.name as team_name,
+        t.name         as team_name,
         t.abbreviation,
         ${selectStat},
         COUNT(DISTINCT gs.game_id) as games_played
        FROM game_stats gs
-       JOIN games g ON g.id = gs.game_id
+       JOIN games g  ON g.id  = gs.game_id
        JOIN players p ON p.id = gs.player_id
-       JOIN teams t ON t.id = p.team_id
+       JOIN teams t   ON t.id = p.team_id
        WHERE g.league_id = $1
-       AND g.season = $2
+       AND g.season      = $2
        ${positions}
        GROUP BY
          p.first_name, p.last_name,
@@ -111,16 +117,20 @@ export const execute = async (
          p.dev_trait,
          t.name, t.abbreviation
        HAVING SUM(gs.pass_yards) + SUM(gs.rush_yards) +
-  SUM(gs.receiving_yards) > 0
+         SUM(gs.receiving_yards) > 0
        ORDER BY stat_total DESC
        LIMIT 10`,
       [league.id, league.current_season]
     );
 
     if (result.rows.length === 0) {
-      await interaction.editReply(
-        `No ${statLabel} data found for Season ${league.current_season}.`
-      );
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.NAVY)
+          .setTitle(`${emoji} ${statLabel} Leaders`)
+          .setDescription(
+            `No data found for Season ${league.current_season}.`
+          )]
+      });
       return;
     }
 
@@ -129,28 +139,41 @@ export const execute = async (
       dev === 'superstar' ? '⭐' :
       dev === 'star'      ? '🌟' : '';
 
-    let response = `${emoji} **${statLabel.toUpperCase()} LEADERS**\n`;
-    response += `**${league.name}** | Season ${league.current_season}\n`;
-    response += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-
-    result.rows.forEach((p: any, i: number) => {
+    const fields = result.rows.map((p: any, i: number) => {
       const medal =
         i === 0 ? '🥇' :
         i === 1 ? '🥈' :
         i === 2 ? '🥉' :
-        `${i + 1}.`;
+        `**${i + 1}.**`;
 
-      response += `${medal} **${p.first_name} ${p.last_name}** ${devEmoji(p.dev_trait)}\n`;
-      response += `   ${p.position} | ${p.team_name} | **${parseFloat(p.stat_total).toFixed(stat === 'sacks' ? 1 : 0)}** ${statLabel}\n`;
-      response += `   ${p.games_played} games played\n\n`;
+      const statValue = parseFloat(p.stat_total).toFixed(
+        stat === 'sacks' ? 1 : 0
+      );
+
+      return {
+        name:
+          `${medal} ${p.first_name} ${p.last_name} ` +
+          `${devEmoji(p.dev_trait)}`,
+        value:
+          `${p.position} | ${p.team_name}\n` +
+          `**${statValue}** ${statLabel} | ${p.games_played} games`,
+        inline: true
+      };
     });
 
-    response += `*Powered by AccessGrantedSportz*`;
+    const embed = createEmbed(COLORS.NAVY)
+      .setTitle(`${emoji} ${statLabel} Leaders | ${league.name}`)
+      .setDescription(`Season ${league.current_season}`)
+      .addFields(fields);
 
-    await interaction.editReply(response);
+    await interaction.editReply({ embeds: [embed] });
 
   } catch (error) {
     console.error('Leaders command error:', error);
-    await interaction.editReply('❌ Error fetching leaders.');
+    await interaction.editReply({
+      embeds: [createEmbed(COLORS.DANGER)
+        .setTitle('❌ Error')
+        .setDescription('Error fetching leaders. Please try again.')]
+    });
   }
 };

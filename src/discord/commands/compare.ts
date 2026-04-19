@@ -3,6 +3,7 @@ import {
   ChatInputCommandInteraction
 } from 'discord.js';
 import { query } from '../../config/database';
+import { COLORS, createEmbed, createTradeEmbed } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -36,13 +37,16 @@ export const data = new SlashCommandBuilder()
 export const execute = async (
   interaction: ChatInputCommandInteraction
 ) => {
-  console.log('⚡ Compare command received!'); // ADD THIS
   await interaction.deferReply();
 
   try {
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
-      await interaction.editReply('❌ No league connected.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ No League Connected')
+          .setDescription('No league is connected to this server.')]
+      });
       return;
     }
 
@@ -56,6 +60,7 @@ export const execute = async (
           p.position, p.overall_rating,
           p.dev_trait, p.age, p.speed,
           t.name as team_name,
+          t.abbreviation as team_abbr,
           t.wins, t.losses,
           COALESCE(tvh.total_value, 0) as trade_value
          FROM players p
@@ -83,19 +88,29 @@ export const execute = async (
     ]);
 
     if (!p1) {
-      await interaction.editReply(`❌ Player "${name1}" not found.`);
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Player Not Found')
+          .setDescription(`Player "${name1}" not found in your league.`)]
+      });
       return;
     }
     if (!p2) {
-      await interaction.editReply(`❌ Player "${name2}" not found.`);
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Player Not Found')
+          .setDescription(`Player "${name2}" not found in your league.`)]
+      });
       return;
     }
 
-    const v1   = parseFloat(p1.trade_value);
-    const v2   = parseFloat(p2.trade_value);
-    const diff = Math.abs(v1 - v2);
+    const v1     = parseFloat(p1.trade_value);
+    const v2     = parseFloat(p2.trade_value);
+    const diff   = Math.abs(v1 - v2);
+    const winner = v1 >= v2 ? p1 : p2;
+    const loser  = v1 >= v2 ? p2 : p1;
 
-    const fairness =
+    const verdict =
       diff <= 10  ? '✅ EVEN'            :
       diff <= 25  ? '🟡 SLIGHT EDGE'     :
       diff <= 50  ? '🟠 CLEAR ADVANTAGE' :
@@ -107,33 +122,42 @@ export const execute = async (
       dev === 'superstar' ? '⭐ Superstar' :
       dev === 'star'      ? '🌟 Star'      : '📋 Normal';
 
-    const winner = v1 >= v2 ? p1 : p2;
+    const embed = createTradeEmbed(diff)
+      .setTitle('⚔️ Player Comparison | AccessGrantedSportz')
+      .setDescription(
+        `**${verdict}** | ` +
+        `**${winner.first_name} ${winner.last_name}** leads by ` +
+        `**${diff.toFixed(1)} TVS**`
+      )
+      .addFields(
+        {
+          name:   `🏈 ${p1.first_name} ${p1.last_name}`,
+          value:
+            `${p1.position} | ${p1.team_name} (${p1.wins}-${p1.losses})\n` +
+            `OVR: **${p1.overall_rating}** | Age: ${p1.age} | Spd: ${p1.speed}\n` +
+            `${devLabel(p1.dev_trait)}\n` +
+            `💰 TVS: **${v1.toFixed(1)}**`,
+          inline: true
+        },
+        {
+          name:   `🏈 ${p2.first_name} ${p2.last_name}`,
+          value:
+            `${p2.position} | ${p2.team_name} (${p2.wins}-${p2.losses})\n` +
+            `OVR: **${p2.overall_rating}** | Age: ${p2.age} | Spd: ${p2.speed}\n` +
+            `${devLabel(p2.dev_trait)}\n` +
+            `💰 TVS: **${v2.toFixed(1)}**`,
+          inline: true
+        }
+      );
 
-    let response = `⚔️ **PLAYER COMPARISON** | AccessGrantedSportz\n`;
-    response += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-
-    response += `**${p1.first_name} ${p1.last_name}**\n`;
-    response += `${p1.position} | ${p1.team_name} (${p1.wins}-${p1.losses})\n`;
-    response += `OVR: ${p1.overall_rating} | Age: ${p1.age} | Spd: ${p1.speed}\n`;
-    response += `${devLabel(p1.dev_trait)}\n`;
-    response += `💰 TVS: **${v1.toFixed(1)}**\n\n`;
-
-    response += `**${p2.first_name} ${p2.last_name}**\n`;
-    response += `${p2.position} | ${p2.team_name} (${p2.wins}-${p2.losses})\n`;
-    response += `OVR: ${p2.overall_rating} | Age: ${p2.age} | Spd: ${p2.speed}\n`;
-    response += `${devLabel(p2.dev_trait)}\n`;
-    response += `💰 TVS: **${v2.toFixed(1)}**\n\n`;
-
-    response += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-    response += `**VERDICT:** ${fairness}\n`;
-    response += `**${winner.first_name} ${winner.last_name}** `;
-    response += `leads by **${diff.toFixed(1)}** value points\n\n`;
-    response += `*Powered by AccessGrantedSportz*`;
-
-    await interaction.editReply(response);
+    await interaction.editReply({ embeds: [embed] });
 
   } catch (error) {
     console.error('Compare error:', error);
-    await interaction.editReply('❌ Error comparing players.');
+    await interaction.editReply({
+      embeds: [createEmbed(COLORS.DANGER)
+        .setTitle('❌ Error')
+        .setDescription('Error comparing players. Please try again.')]
+    });
   }
 };

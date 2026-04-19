@@ -3,6 +3,7 @@ import {
   ChatInputCommandInteraction
 } from 'discord.js';
 import { query } from '../../config/database';
+import { COLORS, createEmbed } from '../../config/brand';
 
 const leagueCache = new Map<string, any>();
 
@@ -45,28 +46,25 @@ export const data = new SlashCommandBuilder()
 export const execute = async (
   interaction: ChatInputCommandInteraction
 ) => {
-  console.log('🏈 Standings command triggered');
-
   try {
     await interaction.deferReply();
-    console.log('✅ deferReply successful');
   } catch {
-    console.log('❌ deferReply failed — interaction expired');
     return;
   }
 
   try {
-    console.log('🔍 Getting league for server:', interaction.guildId);
     const league = await getLeagueForServer(interaction.guildId!);
-    console.log('League found:', league?.name || 'NULL');
 
     if (!league) {
-      await interaction.editReply('❌ No league connected.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ No League Connected')
+          .setDescription('No league is connected to this server.')]
+      });
       return;
     }
 
     const view = interaction.options.getString('view') || 'overall';
-    console.log('View:', view);
 
     const result = await query(
       `SELECT
@@ -86,14 +84,19 @@ export const execute = async (
       [league.id]
     );
 
-    console.log('Teams found:', result.rows.length);
-
     if (result.rows.length === 0) {
-      await interaction.editReply('No teams found in your league.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.NAVY)
+          .setTitle('📊 Standings')
+          .setDescription('No teams found in your league.')]
+      });
       return;
     }
 
-    let response = '';
+    const medal = (i: number) =>
+      i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+
+    let embed;
 
     if (view === 'division') {
       const divisions: { [key: string]: any[] } = {};
@@ -103,23 +106,28 @@ export const execute = async (
         divisions[div].push(team);
       });
 
-      response  = `📊 **DIVISION STANDINGS** | ${league.name}\n`;
-      response += `Season ${league.current_season} | Week ${league.current_week}\n`;
-      response += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+      const fields = Object.keys(divisions).sort().map(division => {
+        const conf  = division.startsWith('AFC') ? '🔵' :
+                      division.startsWith('NFC') ? '🔴' : '⚠️';
+        const value = divisions[division].map((team: any, i: number) =>
+          `${medal(i)} **${team.abbreviation}** ${team.wins}-${team.losses} ` +
+          `| OVR: ${team.overall_rating}` +
+          `${team.owner ? ` | ${team.owner}` : ''}`
+        ).join('\n');
 
-      Object.keys(divisions).sort().forEach(division => {
-        const conf = division.startsWith('AFC') ? '🔵' :
-                     division.startsWith('NFC') ? '🔴' : '⚠️';
-        response += `${conf} **${division}**\n`;
-        divisions[division].forEach((team: any, i: number) => {
-          const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
-          response +=
-            `${medal} **${team.abbreviation}** ${team.wins}-${team.losses}` +
-            ` | OVR: ${team.overall_rating}` +
-            `${team.owner ? ` | ${team.owner}` : ''}\n`;
-        });
-        response += '\n';
+        return {
+          name:   `${conf} ${division}`,
+          value:  value || '—',
+          inline: true
+        };
       });
+
+      embed = createEmbed(COLORS.NAVY)
+        .setTitle(`🗺️ Division Standings | ${league.name}`)
+        .setDescription(
+          `Season ${league.current_season} | Week ${league.current_week}`
+        )
+        .addFields(fields.slice(0, 25));
 
     } else if (view === 'conference') {
       const conferences: { [key: string]: any[] } = {};
@@ -129,63 +137,76 @@ export const execute = async (
         conferences[conf].push(team);
       });
 
-      response  = `🏟️ **CONFERENCE STANDINGS** | ${league.name}\n`;
-      response += `Season ${league.current_season} | Week ${league.current_week}\n`;
-      response += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+      const fields = ['AFC', 'NFC', 'Unassigned']
+        .filter(conf => conferences[conf])
+        .map(conf => {
+          const emoji = conf === 'AFC' ? '🔵' : conf === 'NFC' ? '🔴' : '⚠️';
+          const value = conferences[conf]
+            .sort((a: any, b: any) => b.wins - a.wins)
+            .map((team: any, i: number) =>
+              `${medal(i)} **${team.abbreviation}** ${team.wins}-${team.losses} ` +
+              `| ${team.division || 'No Division'}`
+            ).join('\n');
 
-      for (const conf of ['AFC', 'NFC', 'Unassigned']) {
-        if (!conferences[conf]) continue;
-        const emoji = conf === 'AFC' ? '🔵' : conf === 'NFC' ? '🔴' : '⚠️';
-        response += `${emoji} **${conf}**\n`;
-        conferences[conf]
-          .sort((a: any, b: any) => b.wins - a.wins)
-          .forEach((team: any, i: number) => {
-            const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
-            response +=
-              `${medal} **${team.abbreviation}** ${team.wins}-${team.losses}` +
-              ` | ${team.division || 'No Division'}\n`;
-          });
-        response += '\n';
-      }
+          return {
+            name:   `${emoji} ${conf}`,
+            value:  value || '—',
+            inline: true
+          };
+        });
+
+      embed = createEmbed(COLORS.NAVY)
+        .setTitle(`🏟️ Conference Standings | ${league.name}`)
+        .setDescription(
+          `Season ${league.current_season} | Week ${league.current_week}`
+        )
+        .addFields(fields);
 
     } else {
-      response  = `📊 **OVERALL STANDINGS** | ${league.name}\n`;
-      response += `Season ${league.current_season} | Week ${league.current_week}\n`;
-      response += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+      const sorted  = [...result.rows].sort(
+        (a: any, b: any) => b.wins - a.wins
+      );
+      const fields  = sorted.slice(0, 25).map((team: any, i: number) => ({
+        name:
+          `${medal(i)} ${team.name} (${team.abbreviation})`,
+        value:
+          `${team.wins}-${team.losses} | ` +
+          `OVR: ${team.overall_rating} | ` +
+          `${team.division || 'No Division'}` +
+          `${team.owner ? ` | ${team.owner}` : ''}`,
+        inline: false
+      }));
 
-      [...result.rows]
-        .sort((a: any, b: any) => b.wins - a.wins)
-        .forEach((team: any, i: number) => {
-          const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
-          response +=
-            `${medal} **${team.name}** (${team.abbreviation})\n` +
-            `   ${team.wins}-${team.losses}` +
-            ` | OVR: ${team.overall_rating}` +
-            ` | ${team.division || 'No Division'}` +
-            `${team.owner ? ` | ${team.owner}` : ''}\n\n`;
-        });
+      embed = createEmbed(COLORS.NAVY)
+        .setTitle(`📊 Overall Standings | ${league.name}`)
+        .setDescription(
+          `Season ${league.current_season} | Week ${league.current_week}`
+        )
+        .addFields(fields);
     }
 
+    // Warn about unassigned teams
     const unassigned = result.rows.filter(
       (t: any) => !t.conference || !t.division
     );
     if (unassigned.length > 0) {
-      response += `⚠️ **${unassigned.length} team(s) need division assignment:**\n`;
-      unassigned.forEach((t: any) => {
-        response += `   • ${t.name} (${t.abbreviation})\n`;
+      embed.addFields({
+        name:   `⚠️ ${unassigned.length} Team(s) Need Division Assignment`,
+        value:  unassigned.map((t: any) => `• ${t.name} (${t.abbreviation})`).join('\n'),
+        inline: false
       });
     }
 
-    response += `\n*Powered by AccessGrantedSportz*`;
-
-    console.log('✅ Sending response...');
-    await interaction.editReply(response);
-    console.log('✅ Response sent!');
+    await interaction.editReply({ embeds: [embed] });
 
   } catch (error) {
-    console.error('❌ Standings error:', error);
+    console.error('Standings error:', error);
     try {
-      await interaction.editReply('❌ Error fetching standings.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Error')
+          .setDescription('Error fetching standings. Please try again.')]
+      });
     } catch {
       // Ignore
     }

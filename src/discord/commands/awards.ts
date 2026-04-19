@@ -4,6 +4,7 @@ import {
 } from 'discord.js';
 import { getAwardLeaders } from '../../services/awardsService';
 import { getLeagueForServer } from '../helpers';
+import { COLORS, FOOTER, createEmbed } from '../../config/brand';
 
 export const data = new SlashCommandBuilder()
   .setName('awards')
@@ -17,7 +18,10 @@ export const execute = async (
   try {
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
-      await interaction.editReply('❌ No league connected.');
+      const errorEmbed = createEmbed(COLORS.DANGER)
+        .setTitle('❌ No League Connected')
+        .setDescription('No league is connected to this server.');
+      await interaction.editReply({ embeds: [errorEmbed] });
       return;
     }
 
@@ -27,9 +31,12 @@ export const execute = async (
     );
 
     if (awards.length === 0) {
-      await interaction.editReply(
-        `No awards calculated yet for Season ${league.current_season}. Try /calculate first.`
-      );
+      const noDataEmbed = createEmbed(COLORS.NAVY)
+        .setTitle('🏆 Award Leaders')
+        .setDescription(
+          `No awards calculated yet for Season ${league.current_season}.`
+        );
+      await interaction.editReply({ embeds: [noDataEmbed] });
       return;
     }
 
@@ -43,10 +50,6 @@ export const execute = async (
       cat === 'team'        ? '🏟️' :
       cat === 'statistical' ? '📊' : '🏆';
 
-    let response = `🏆 **AWARD LEADERS** | AccessGrantedSportz\n`;
-    response += `**${league.name}** | Season ${league.current_season}\n`;
-    response += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-
     // Group by category
     const categories: { [key: string]: any[] } = {};
     awards.forEach((award: any) => {
@@ -56,29 +59,39 @@ export const execute = async (
       categories[award.category].push(award);
     });
 
-    for (const [category, categoryAwards] of Object.entries(categories)) {
-      response += `${categoryEmoji(category)} **${category.toUpperCase()} AWARDS**\n`;
+    // Build embed fields from categories
+    const fields: { name: string; value: string; inline: boolean }[] = [];
 
-      categoryAwards.forEach((award: any) => {
+    for (const [category, categoryAwards] of Object.entries(categories)) {
+      const fieldValue = categoryAwards.map((award: any) => {
         const winner = award.first_name
           ? `${award.first_name} ${award.last_name} ${devEmoji(award.dev_trait || '')}`
           : award.team_name;
+        const team = award.team_abbreviation
+          ? ` (${award.team_abbreviation})`
+          : '';
+        return `🏅 **${award.award_name}**\n${winner}${team}`;
+      }).join('\n\n');
 
-        response += `🏅 **${award.award_name}**\n`;
-        response += `   ${winner}`;
-        if (award.team_abbreviation) {
-          response += ` (${award.team_abbreviation})`;
-        }
-        response += `\n\n`;
+      fields.push({
+        name:   `${categoryEmoji(category)} ${category.toUpperCase()} AWARDS`,
+        value:  fieldValue.slice(0, 1024),
+        inline: false
       });
     }
 
-    response += `*Powered by AccessGrantedSportz*`;
+    const embed = createEmbed(COLORS.GOLD)
+      .setTitle(`🏆 Award Leaders | ${league.name}`)
+      .setDescription(`Season ${league.current_season}`)
+      .addFields(fields);
 
-    await interaction.editReply(response);
+    await interaction.editReply({ embeds: [embed] });
 
   } catch (error) {
     console.error('Awards command error:', error);
-    await interaction.editReply('❌ Error fetching awards.');
+    const errorEmbed = createEmbed(COLORS.DANGER)
+      .setTitle('❌ Error')
+      .setDescription('Error fetching awards. Please try again.');
+    await interaction.editReply({ embeds: [errorEmbed] });
   }
 };

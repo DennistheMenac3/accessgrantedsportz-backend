@@ -4,11 +4,11 @@ import {
 } from 'discord.js';
 import { query } from '../../config/database';
 import { v4 as uuidv4 } from 'uuid';
+import { COLORS, createEmbed } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
-    `SELECT l.*
-     FROM leagues l
+    `SELECT l.* FROM leagues l
      WHERE l.discord_guild_id = $1
      LIMIT 1`,
     [guildId]
@@ -38,7 +38,11 @@ export const execute = async (
   try {
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
-      await interaction.editReply('❌ No league connected to this server.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ No League Connected')
+          .setDescription('No league is connected to this server.')]
+      });
       return;
     }
 
@@ -46,12 +50,9 @@ export const execute = async (
     const discordUserId = interaction.user.id;
     const discordTag    = interaction.user.username;
 
-    // =============================================
-    // Step 1 — Validate invite code
-    // =============================================
+    // Validate invite code
     const inviteResult = await query(
-      `SELECT li.*,
-        l.name as league_name
+      `SELECT li.*, l.name as league_name
        FROM league_invites li
        JOIN leagues l ON l.id = li.league_id
        WHERE li.invite_code = $1
@@ -63,17 +64,18 @@ export const execute = async (
     );
 
     if (inviteResult.rows.length === 0) {
-      await interaction.editReply(
-        '❌ Invalid or expired invite code. Ask your commissioner for a new one.'
-      );
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Invalid Invite Code')
+          .setDescription(
+            'This invite code is invalid or expired.\n' +
+            'Ask your commissioner for a new one.'
+          )]
+      });
       return;
     }
 
-    const invite = inviteResult.rows[0];
-
-    // =============================================
-    // Step 2 — Check if Discord already linked
-    // =============================================
+    // Check if Discord already linked
     const existingUser = await query(
       `SELECT u.*, t.name as team_name, t.abbreviation
        FROM users u
@@ -85,24 +87,28 @@ export const execute = async (
     if (existingUser.rows.length > 0) {
       const user = existingUser.rows[0];
       if (user.team_name) {
-        await interaction.editReply(
-          `✅ You're already linked!\n` +
-          `**Team:** ${user.team_name} (${user.abbreviation})\n` +
-          `**Username:** ${user.username}`
-        );
+        await interaction.editReply({
+          embeds: [createEmbed(COLORS.SUCCESS)
+            .setTitle('✅ Already Linked!')
+            .addFields(
+              { name: '🏈 Team',     value: `${user.team_name} (${user.abbreviation})`, inline: true },
+              { name: '👤 Username', value: user.username,                               inline: true }
+            )]
+        });
       } else {
-        await interaction.editReply(
-          `✅ Your Discord is linked but you haven't claimed a team yet.\n` +
-          `Visit the invite link to pick your team!`
-        );
+        await interaction.editReply({
+          embeds: [createEmbed(COLORS.WARNING)
+            .setTitle('✅ Discord Linked — No Team Yet')
+            .setDescription(
+              'Your Discord is linked but you haven\'t claimed a team.\n' +
+              'Use **/claim [abbreviation]** to pick your team!'
+            )]
+        });
       }
       return;
     }
 
-    // =============================================
-    // Step 3 — Check if user has a web account
-    // already linked to this league
-    // =============================================
+    // Check if user has existing web account
     const leagueMember = await query(
       `SELECT lm.*, u.username, u.id as user_id,
         t.name as team_name, t.abbreviation
@@ -116,38 +122,37 @@ export const execute = async (
     );
 
     if (leagueMember.rows.length > 0) {
-      // Show them their options if multiple unlinked accounts
       const member = leagueMember.rows[0];
-
-      // Link Discord to their existing account
       await query(
-        `UPDATE users 
-         SET discord_user_id = $1,
-             discord_username = $2
+        `UPDATE users SET
+          discord_user_id  = $1,
+          discord_username = $2
          WHERE id = $3`,
         [discordUserId, discordTag, member.user_id]
       );
 
-      await interaction.editReply(
-        `✅ **Discord linked successfully!**\n\n` +
-        `**League:** ${league.name}\n` +
-        `**Username:** ${member.username}\n` +
-        `${member.team_name
-          ? `**Team:** ${member.team_name} (${member.abbreviation})`
-          : `**Team:** Not yet claimed — visit the invite link to pick one!`
-        }\n\n` +
-        `You'll now be tagged in score updates! 🏈`
-      );
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.SUCCESS)
+          .setTitle('✅ Discord Linked Successfully!')
+          .setDescription('You\'ll now be tagged in score updates!')
+          .addFields(
+            { name: '🏈 League',   value: league.name,       inline: true },
+            { name: '👤 Username', value: member.username,   inline: true },
+            {
+              name:  '🏟️ Team',
+              value: member.team_name
+                ? `${member.team_name} (${member.abbreviation})`
+                : 'Not claimed — use **/claim [abbr]**',
+              inline: true
+            }
+          )]
+      });
       return;
     }
 
-    // =============================================
-    // Step 4 — Create new account via Discord
-    // No web signup needed
-    // =============================================
+    // Create new account via Discord
     const newUserId = uuidv4();
 
-    // Create user account
     await query(
       `INSERT INTO users (
         id, username, email,
@@ -164,65 +169,66 @@ export const execute = async (
       ]
     );
 
-    // Add to league members
     await query(
-      `INSERT INTO league_members (
-        id, league_id, user_id, role
-      )
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (league_id, user_id) DO NOTHING`,
+      `INSERT INTO league_members (id, league_id, user_id, role)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (league_id, user_id) DO NOTHING`,
       [uuidv4(), league.id, newUserId, 'member']
     );
 
-    // Increment invite uses
     await query(
-      `UPDATE league_invites
-       SET uses = uses + 1
+      `UPDATE league_invites SET uses = uses + 1
        WHERE invite_code = $1`,
       [code]
     );
 
-    // =============================================
-    // Step 5 — Show available teams to claim
-    // =============================================
+    // Show available teams
     const teamsResult = await query(
-      `SELECT id, name, abbreviation,
-        overall_rating, wins, losses
+      `SELECT id, name, abbreviation, overall_rating, wins, losses
        FROM teams
        WHERE league_id = $1
        AND owner_id IS NULL
-       ORDER BY name ASC`,
+       ORDER BY overall_rating DESC`,
       [league.id]
     );
 
     if (teamsResult.rows.length === 0) {
-      await interaction.editReply(
-        `✅ **Welcome to ${league.name}!**\n\n` +
-        `Your Discord account has been linked.\n` +
-        `Unfortunately all teams are taken. Contact your commissioner.`
-      );
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.WARNING)
+          .setTitle(`✅ Welcome to ${league.name}!`)
+          .setDescription(
+            'Your Discord account has been linked.\n' +
+            'Unfortunately all teams are taken — contact your commissioner.'
+          )]
+      });
       return;
     }
 
-    // Format available teams list
-    let teamList = `✅ **Welcome to ${league.name}!**\n\n`;
-    teamList += `Your Discord is now linked 🎉\n\n`;
-    teamList += `**Available Teams:**\n`;
+    const teamFields = teamsResult.rows.slice(0, 10).map((team: any) => ({
+      name:   `${team.abbreviation} — ${team.name}`,
+      value:  `${team.wins}-${team.losses} | OVR: ${team.overall_rating}`,
+      inline: true
+    }));
 
-    teamsResult.rows.forEach((team: any) => {
-      teamList +=
-        `• **${team.abbreviation}** — ${team.name} ` +
-        `(${team.wins}-${team.losses}) OVR: ${team.overall_rating}\n`;
+    await interaction.editReply({
+      embeds: [createEmbed(COLORS.GOLD)
+        .setTitle(`✅ Welcome to ${league.name}!`)
+        .setDescription(
+          `Your Discord is linked! 🎉\n\n` +
+          `Use **/claim [abbreviation]** to claim your team.\n` +
+          `Example: \`/claim BAL\``
+        )
+        .addFields(teamFields)]
     });
-
-    teamList += `\nUse **/claim [team abbreviation]** to claim your team!`;
-
-    await interaction.editReply(teamList);
 
   } catch (error) {
     console.error('Join command error:', error);
     try {
-      await interaction.editReply('❌ Error joining league. Please try again.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Error')
+          .setDescription('Error joining league. Please try again.')]
+      });
     } catch {
       // Ignore
     }

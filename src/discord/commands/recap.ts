@@ -4,15 +4,12 @@ import {
   ActionRowBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
-  ButtonBuilder,
-  ButtonStyle,
-  ButtonInteraction,
-  ComponentType,
-  EmbedBuilder
+  ComponentType
 } from 'discord.js';
 import { query } from '../../config/database';
 import { generatePostGameRecap } from '../../services/aiStorylineService';
-import { splitMessage, postToChannel } from '../bot';
+import { postToChannel } from '../bot';
+import { COLORS, createEmbed } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -43,25 +40,31 @@ export const execute = async (
   try {
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
-      await interaction.editReply('❌ No league connected.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ No League Connected')
+          .setDescription('No league is connected to this server.')]
+      });
       return;
     }
 
-    // =============================================
     // Step 1 — Show week selector
-    // =============================================
     const weeksResult = await query(
-      `SELECT DISTINCT week 
-       FROM games 
-       WHERE league_id = $1 
-       AND season = $2
+      `SELECT DISTINCT week
+       FROM games
+       WHERE league_id = $1
+       AND season      = $2
        ORDER BY week DESC
        LIMIT 25`,
       [league.id, league.current_season]
     );
 
     if (weeksResult.rows.length === 0) {
-      await interaction.editReply('❌ No games found in your league.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.NAVY)
+          .setTitle('📰 Game Recap')
+          .setDescription('No games found in your league yet.')]
+      });
       return;
     }
 
@@ -71,7 +74,6 @@ export const execute = async (
       emoji: '📅'
     }));
 
-    // Add full season option
     weekOptions.unshift({
       label: '📊 Full Season Summary',
       value: 'season_summary',
@@ -87,13 +89,13 @@ export const execute = async (
       .addComponents(weekMenu);
 
     await interaction.editReply({
-      content: `📰 **GAME RECAP** | ${league.name}\nSelect a week to get started:`,
+      embeds: [createEmbed(COLORS.NAVY)
+        .setTitle(`📰 Game Recap | ${league.name}`)
+        .setDescription('Select a week to get started:')],
       components: [weekRow]
     });
 
-    // =============================================
     // Step 2 — Handle week selection
-    // =============================================
     const weekCollector = interaction.channel?.createMessageComponentCollector({
       componentType: ComponentType.StringSelect,
       time:          60000,
@@ -110,7 +112,9 @@ export const execute = async (
       // Handle full season summary
       if (selectedValue === 'season_summary') {
         await interaction.editReply({
-          content: '⏳ Generating full season summary... This may take a moment.',
+          embeds: [createEmbed(COLORS.NAVY)
+            .setTitle('⏳ Generating Season Summary...')
+            .setDescription('This may take a moment.')],
           components: []
         });
 
@@ -124,44 +128,46 @@ export const execute = async (
            JOIN teams ht ON ht.id = g.home_team_id
            JOIN teams at ON at.id = g.away_team_id
            WHERE g.league_id = $1
-           AND g.season = $2
+           AND g.season      = $2
            ORDER BY g.week ASC`,
           [league.id, league.current_season]
         );
 
-        let summary = `🏆 **SEASON ${league.current_season} SUMMARY** | ${league.name}\n`;
-        summary += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-
-        let currentWeek = 0;
+        // Group by week
+        const weekGroups: { [key: number]: any[] } = {};
         allGamesResult.rows.forEach((game: any) => {
-          if (game.week !== currentWeek) {
-            currentWeek = game.week;
-            summary += `**📅 Week ${game.week}**\n`;
-          }
-          const homeWon = game.home_score > game.away_score;
-          summary +=
-            `${game.away_abbr} **${game.away_score}** - ` +
-            `**${game.home_score}** ${game.home_abbr} ` +
-            `${homeWon ? '🏆' : ''}\n`;
+          if (!weekGroups[game.week]) weekGroups[game.week] = [];
+          weekGroups[game.week].push(game);
         });
 
-        summary += `\n*Use /recap to get AI recaps for individual games*\n`;
-        summary += `*Powered by AccessGrantedSportz*`;
+        const fields = Object.entries(weekGroups)
+          .slice(0, 25)
+          .map(([week, games]) => ({
+            name:   `📅 Week ${week}`,
+            value:  (games as any[]).map((game: any) => {
+              const homeWon = game.home_score > game.away_score;
+              return (
+                `${homeWon ? '' : '🏆 '}**${game.away_abbr}** ` +
+                `${game.away_score} - ${game.home_score} ` +
+                `**${game.home_abbr}**${homeWon ? ' 🏆' : ''}`
+              );
+            }).join('\n'),
+            inline: false
+          }));
 
-        const chunks = splitMessage(summary, 2000);
-        await interaction.editReply({ content: chunks[0], components: [] });
-        for (let i = 1; i < chunks.length; i++) {
-          await postToChannel(interaction.channelId!, chunks[i]);
-        }
+        const summaryEmbed = createEmbed(COLORS.GOLD)
+          .setTitle(`🏆 Season ${league.current_season} Summary | ${league.name}`)
+          .addFields(fields.slice(0, 10));
+
+        await interaction.editReply({
+          embeds:     [summaryEmbed],
+          components: []
+        });
         return;
       }
 
-      // Get week number
-      const weekNum = parseInt(selectedValue.replace('week_', ''));
-
-      // =============================================
-      // Step 3 — Show game selector for that week
-      // =============================================
+      // Step 3 — Show game selector
+      const weekNum     = parseInt(selectedValue.replace('week_', ''));
       const gamesResult = await query(
         `SELECT g.*,
           ht.name as home_team, ht.abbreviation as home_abbr,
@@ -172,33 +178,34 @@ export const execute = async (
          JOIN teams ht ON ht.id = g.home_team_id
          JOIN teams at ON at.id = g.away_team_id
          WHERE g.league_id = $1
-         AND g.season = $2
-         AND g.week = $3
+         AND g.season      = $2
+         AND g.week        = $3
          ORDER BY g.home_score + g.away_score DESC`,
         [league.id, league.current_season, weekNum]
       );
 
       if (gamesResult.rows.length === 0) {
         await interaction.editReply({
-          content: `❌ No games found for Week ${weekNum}.`,
+          embeds: [createEmbed(COLORS.DANGER)
+            .setTitle(`❌ No Games Found`)
+            .setDescription(`No games found for Week ${weekNum}.`)],
           components: []
         });
         return;
       }
 
       const gameOptions = gamesResult.rows.map((game: any) => ({
-        label: `${game.away_abbr} ${game.away_score} - ${game.home_score} ${game.home_abbr}`,
+        label:       `${game.away_abbr} ${game.away_score} - ${game.home_score} ${game.home_abbr}`,
         description: `${game.away_team} vs ${game.home_team}`,
-        value: game.id,
-        emoji: game.away_score > game.home_score ? '🏆' : '🏈'
+        value:       game.id,
+        emoji:       game.away_score > game.home_score ? '🏆' : '🏈'
       }));
 
-      // Add full week option
       gameOptions.unshift({
-        label: `📊 All Week ${weekNum} Scores`,
+        label:       `📊 All Week ${weekNum} Scores`,
         description: 'See all game scores for this week',
-        value: `week_scores_${weekNum}`,
-        emoji: '📅'
+        value:       `week_scores_${weekNum}`,
+        emoji:       '📅'
       });
 
       const gameMenu = new StringSelectMenuBuilder()
@@ -210,15 +217,13 @@ export const execute = async (
         .addComponents(gameMenu);
 
       await interaction.editReply({
-        content:
-          `📰 **Week ${weekNum} Games** | ${league.name}\n` +
-          `Select a game for the AI recap:`,
+        embeds: [createEmbed(COLORS.NAVY)
+          .setTitle(`📰 Week ${weekNum} Games | ${league.name}`)
+          .setDescription('Select a game for the AI recap:')],
         components: [gameRow]
       });
 
-      // =============================================
       // Step 4 — Handle game selection
-      // =============================================
       const gameCollector = interaction.channel?.createMessageComponentCollector({
         componentType: ComponentType.StringSelect,
         time:          60000,
@@ -232,43 +237,45 @@ export const execute = async (
 
         const selectedGameId = gameInteraction.values[0];
 
-        // Handle week scores summary
+        // Week scores summary
         if (selectedGameId.startsWith('week_scores_')) {
-          let scoreMsg = `🏈 **Week ${weekNum} Scores** | ${league.name}\n`;
-          scoreMsg += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-
-          gamesResult.rows.forEach((game: any) => {
+          const fields = gamesResult.rows.map((game: any) => {
             const homeWon = game.home_score > game.away_score;
             const awayWon = game.away_score > game.home_score;
-            scoreMsg +=
-              `${awayWon ? '🏆 ' : ''}**${game.away_abbr}** ` +
-              `(${game.away_wins}-${game.away_losses}) ` +
-              `**${game.away_score}** - ` +
-              `**${game.home_score}** ` +
-              `**${game.home_abbr}** ` +
-              `(${game.home_wins}-${game.home_losses})` +
-              `${homeWon ? ' 🏆' : ''}\n\n`;
+            return {
+              name:
+                `${awayWon ? '🏆 ' : ''}${game.away_abbr} ` +
+                `${game.away_score} - ${game.home_score} ` +
+                `${game.home_abbr}${homeWon ? ' 🏆' : ''}`,
+              value:
+                `${game.away_wins}-${game.away_losses} | ` +
+                `${game.home_wins}-${game.home_losses}`,
+              inline: true
+            };
           });
 
-          scoreMsg += `*Use /recap again to get an AI recap for a specific game*\n`;
-          scoreMsg += `*Powered by AccessGrantedSportz*`;
-
-          await interaction.editReply({ content: scoreMsg, components: [] });
+          await interaction.editReply({
+            embeds: [createEmbed(COLORS.NAVY)
+              .setTitle(`🏈 Week ${weekNum} Scores | ${league.name}`)
+              .setDescription(`Season ${league.current_season}`)
+              .addFields(fields)],
+            components: []
+          });
           return;
         }
 
-        // =============================================
-        // Step 5 — Generate AI recap for selected game
-        // =============================================
+        // Step 5 — Generate AI recap
         const selectedGame = gamesResult.rows.find(
           (g: any) => g.id === selectedGameId
         );
 
         await interaction.editReply({
-          content:
-            `⏳ **Generating AI recap...**\n` +
-            `${selectedGame?.away_team} vs ${selectedGame?.home_team}\n` +
-            `This takes about 10 seconds...`,
+          embeds: [createEmbed(COLORS.NAVY)
+            .setTitle('⏳ Generating AI Recap...')
+            .setDescription(
+              `${selectedGame?.away_team} vs ${selectedGame?.home_team}\n` +
+              `This takes about 10 seconds...`
+            )],
           components: []
         });
 
@@ -284,29 +291,39 @@ export const execute = async (
               ? selectedGame.home_team
               : selectedGame.away_team;
 
-          const header =
-            `📰 **FINAL WHISTLE** | AccessGrantedSportz\n` +
-            `${selectedGame.home_team} **${selectedGame.home_score}** — ` +
-            `${selectedGame.away_team} **${selectedGame.away_score}** | 🏆 ${winner}\n` +
-            `Week ${weekNum} | Season ${league.current_season}\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-
-          const fullRecap = header + recap;
-          const chunks   = splitMessage(fullRecap, 2000);
+          const recapEmbed = createEmbed(COLORS.NAVY)
+            .setTitle('📰 Final Whistle | AccessGrantedSportz')
+            .setDescription(
+              `**${selectedGame.home_team} ${selectedGame.home_score}** — ` +
+              `**${selectedGame.away_score} ${selectedGame.away_team}**\n` +
+              `🏆 ${winner} wins | Week ${weekNum} | ` +
+              `Season ${league.current_season}`
+            )
+            .addFields({
+              name:  '📋 Game Recap',
+              value: recap.slice(0, 1024),
+              inline: false
+            });
 
           await interaction.editReply({
-            content:    chunks[0],
+            embeds:     [recapEmbed],
             components: []
           });
 
-          for (let i = 1; i < chunks.length; i++) {
-            await postToChannel(interaction.channelId!, chunks[i]);
+          // Post overflow if recap is long
+          if (recap.length > 1024) {
+            await postToChannel(
+              interaction.channelId!,
+              recap.slice(1024)
+            );
           }
 
         } catch (recapError) {
           console.error('Recap generation error:', recapError);
           await interaction.editReply({
-            content:    '❌ Error generating recap. Please try again.',
+            embeds: [createEmbed(COLORS.DANGER)
+              .setTitle('❌ Error')
+              .setDescription('Error generating recap. Please try again.')],
             components: []
           });
         }
@@ -315,7 +332,9 @@ export const execute = async (
       gameCollector?.on('end', async (collected) => {
         if (collected.size === 0) {
           await interaction.editReply({
-            content:    '⏰ Timed out. Run /recap again.',
+            embeds: [createEmbed(COLORS.WARNING)
+              .setTitle('⏰ Timed Out')
+              .setDescription('Run /recap again to try.')],
             components: []
           });
         }
@@ -325,7 +344,9 @@ export const execute = async (
     weekCollector?.on('end', async (collected) => {
       if (collected.size === 0) {
         await interaction.editReply({
-          content:    '⏰ Timed out. Run /recap again.',
+          embeds: [createEmbed(COLORS.WARNING)
+            .setTitle('⏰ Timed Out')
+            .setDescription('Run /recap again to try.')],
           components: []
         });
       }
@@ -335,7 +356,9 @@ export const execute = async (
     console.error('Recap error:', error);
     try {
       await interaction.editReply({
-        content:    '❌ Error loading recap.',
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Error')
+          .setDescription('Error loading recap. Please try again.')],
         components: []
       });
     } catch {

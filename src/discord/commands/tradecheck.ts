@@ -1,10 +1,12 @@
 import {
   SlashCommandBuilder,
-  ChatInputCommandInteraction
+  ChatInputCommandInteraction,
+  EmbedBuilder
 } from 'discord.js';
 import { query } from '../../config/database';
 import { generateTradeAdvice } from '../../services/aiStorylineService';
-import { splitMessage, postToChannel } from '../bot';
+import { postToChannel } from '../bot';
+import { COLORS, FOOTER, createTradeEmbed } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -134,43 +136,51 @@ export const execute = async (
 
     const offeredValue   = parseFloat(offered.trade_value  || '0');
     const requestedValue = parseFloat(requested.trade_value || '0');
-    const difference     = offeredValue - requestedValue;
-    const absDiff        = Math.abs(difference);
+    const absDiff        = Math.abs(offeredValue - requestedValue);
 
-    let response = `⚖️ **TRADE ANALYSIS** | AccessGrantedSportz\n`;
-    response += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    const tradeEmbed = createTradeEmbed(absDiff)
+      .setTitle('⚖️ Trade Analysis | AccessGrantedSportz')
+      .setDescription(
+        `**${advice.verdict}** | Gap: **${absDiff.toFixed(1)} TVS** | ` +
+        `Winner: **${advice.winner}**`
+      )
+      .addFields(
+        {
+          name:   '📤 You Offer',
+          value:
+            `**${offered.first_name} ${offered.last_name}**\n` +
+            `${offered.position} | ${offered.team_name} ` +
+            `(${offered.wins}-${offered.losses})\n` +
+            `OVR: ${offered.overall_rating} | Age: ${offered.age} | ` +
+            `Spd: ${offered.speed} | ${devLabel(offered.dev_trait)}\n` +
+            `💰 TVS: **${offeredValue.toFixed(1)}**`,
+          inline: true
+        },
+        {
+          name:   '📥 You Receive',
+          value:
+            `**${requested.first_name} ${requested.last_name}**\n` +
+            `${requested.position} | ${requested.team_name} ` +
+            `(${requested.wins}-${requested.losses})\n` +
+            `OVR: ${requested.overall_rating} | Age: ${requested.age} | ` +
+            `Spd: ${requested.speed} | ${devLabel(requested.dev_trait)}\n` +
+            `💰 TVS: **${requestedValue.toFixed(1)}**`,
+          inline: true
+        },
+        {
+          name:  '🤖 AI Trade Advisor',
+          value: advice.advice.slice(0, 1024)
+        }
+      );
 
-    response += `**YOU OFFER:**\n`;
-    response += `🏈 **${offered.first_name} ${offered.last_name}**\n`;
-    response += `${offered.position} | ${offered.team_name} `;
-    response += `(${offered.wins}-${offered.losses})\n`;
-    response += `OVR: ${offered.overall_rating} | Age: ${offered.age} | `;
-    response += `Spd: ${offered.speed} | ${devLabel(offered.dev_trait)}\n`;
-    response += `💰 TVS: **${offeredValue.toFixed(1)}**\n\n`;
+    await interaction.editReply({ embeds: [tradeEmbed] });
 
-    response += `**YOU RECEIVE:**\n`;
-    response += `🏈 **${requested.first_name} ${requested.last_name}**\n`;
-    response += `${requested.position} | ${requested.team_name} `;
-    response += `(${requested.wins}-${requested.losses})\n`;
-    response += `OVR: ${requested.overall_rating} | Age: ${requested.age} | `;
-    response += `Spd: ${requested.speed} | ${devLabel(requested.dev_trait)}\n`;
-    response += `💰 TVS: **${requestedValue.toFixed(1)}**\n\n`;
-
-    response += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-    response += `**VERDICT:** ${advice.verdict}\n`;
-    response += `**Value Gap:** ${absDiff.toFixed(1)} points\n`;
-    response += `**Winner:** ${advice.winner}\n\n`;
-
-    response += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-    response += `🤖 **AI TRADE ADVISOR:**\n\n`;
-    response += advice.advice;
-    response += `\n\n*Powered by AccessGrantedSportz Trade Engine*`;
-
-    const chunks = splitMessage(response, 2000);
-    await interaction.editReply(chunks[0]);
-
-    for (let i = 1; i < chunks.length; i++) {
-      await postToChannel(interaction.channelId!, chunks[i]);
+    if (advice.advice.length > 1024) {
+      const overflowEmbed = new EmbedBuilder()
+        .setColor(COLORS.NAVY)
+        .setDescription(advice.advice.slice(1024))
+        .setFooter({ text: FOOTER.text });
+      await interaction.followUp({ embeds: [overflowEmbed] });
     }
 
   } catch (error) {

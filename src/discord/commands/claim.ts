@@ -3,6 +3,7 @@ import {
   ChatInputCommandInteraction
 } from 'discord.js';
 import { query } from '../../config/database';
+import { COLORS, createEmbed } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -36,7 +37,11 @@ export const execute = async (
   try {
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
-      await interaction.editReply('❌ No league connected.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ No League Connected')
+          .setDescription('No league is connected to this server.')]
+      });
       return;
     }
 
@@ -47,17 +52,20 @@ export const execute = async (
 
     // Find the user by Discord ID
     const userResult = await query(
-      `SELECT u.*
-       FROM users u
+      `SELECT u.* FROM users u
        WHERE u.discord_user_id = $1`,
       [discordUserId]
     );
 
     if (userResult.rows.length === 0) {
-      await interaction.editReply(
-        `❌ You haven't joined the league yet.\n` +
-        `Use **/join [invite code]** first!`
-      );
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Not Joined Yet')
+          .setDescription(
+            `You haven't joined the league yet.\n` +
+            `Use **/join [invite code]** first!`
+          )]
+      });
       return;
     }
 
@@ -66,32 +74,40 @@ export const execute = async (
     // Check if already has a team
     const existingTeam = await query(
       `SELECT t.* FROM teams t
-       WHERE t.owner_id  = $1
-       AND t.league_id   = $2`,
+       WHERE t.owner_id = $1
+       AND t.league_id  = $2`,
       [user.id, league.id]
     );
 
     if (existingTeam.rows.length > 0) {
-      await interaction.editReply(
-        `❌ You already own **${existingTeam.rows[0].name}**.\n` +
-        `Contact your commissioner to change teams.`
-      );
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.WARNING)
+          .setTitle('⚠️ Already Have a Team')
+          .setDescription(
+            `You already own **${existingTeam.rows[0].name}**.\n` +
+            `Contact your commissioner to change teams.`
+          )]
+      });
       return;
     }
 
     // Find the requested team
     const teamResult = await query(
       `SELECT * FROM teams
-       WHERE league_id   = $1
-       AND abbreviation  = $2`,
+       WHERE league_id  = $1
+       AND abbreviation = $2`,
       [league.id, teamAbbr]
     );
 
     if (teamResult.rows.length === 0) {
-      await interaction.editReply(
-        `❌ Team **${teamAbbr}** not found.\n` +
-        `Use **/join** to see available teams.`
-      );
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Team Not Found')
+          .setDescription(
+            `Team **${teamAbbr}** not found.\n` +
+            `Use **/join** to see available teams.`
+          )]
+      });
       return;
     }
 
@@ -99,19 +115,23 @@ export const execute = async (
 
     // Check if team is taken
     if (team.owner_id) {
-      await interaction.editReply(
-        `❌ **${team.name}** is already taken.\n` +
-        `Use **/join** to see available teams.`
-      );
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Team Already Taken')
+          .setDescription(
+            `**${team.name}** is already taken.\n` +
+            `Use **/join** to see available teams.`
+          )]
+      });
       return;
     }
 
     // Claim the team
     await query(
       `UPDATE teams
-       SET owner_id        = $1,
-           owner_username  = $2
-       WHERE id            = $3`,
+       SET owner_id       = $1,
+           owner_username = $2
+       WHERE id           = $3`,
       [user.id, user.username, team.id]
     );
 
@@ -124,19 +144,28 @@ export const execute = async (
       [team.id, league.id, user.id]
     );
 
-    await interaction.editReply(
-      `✅ **${team.name} is yours!**\n\n` +
-      `🏈 **${team.abbreviation}** — ${team.name}\n` +
-      `Record: ${team.wins}-${team.losses}\n` +
-      `Overall: ${team.overall_rating}\n\n` +
-      `You'll be tagged in score updates as <@${discordUserId}>\n` +
-      `Good luck this season! 🏆`
-    );
+    await interaction.editReply({
+      embeds: [createEmbed(COLORS.SUCCESS)
+        .setTitle(`✅ ${team.name} is Yours!`)
+        .setDescription(
+          `Welcome to the league! You now control the **${team.name}**.\n\n` +
+          `You'll be tagged in score updates as <@${discordUserId}>`
+        )
+        .addFields(
+          { name: '🏈 Team',    value: `${team.abbreviation} — ${team.name}`, inline: true },
+          { name: '📊 Record',  value: `${team.wins}-${team.losses}`,          inline: true },
+          { name: '⭐ Overall', value: `${team.overall_rating}`,               inline: true }
+        )]
+    });
 
   } catch (error) {
     console.error('Claim command error:', error);
     try {
-      await interaction.editReply('❌ Error claiming team.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ Error')
+          .setDescription('Error claiming team. Please try again.')]
+      });
     } catch {
       // Ignore
     }

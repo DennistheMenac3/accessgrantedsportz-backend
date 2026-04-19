@@ -3,8 +3,8 @@ import {
   ChatInputCommandInteraction
 } from 'discord.js';
 import { generateTradeRumors } from '../../services/aiStorylineService';
-import { splitMessage } from '../bot';
 import { query } from '../../config/database';
+import { COLORS, createEmbed } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -38,13 +38,22 @@ export const execute = async (
     const league = await getLeagueForServer(interaction.guildId!);
 
     if (!league) {
-      await interaction.editReply('❌ No league connected to this server.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ No League Connected')
+          .setDescription('No league is connected to this server.')]
+      });
       return;
     }
 
     const weeksToDeadline = interaction.options.getInteger('deadline') ?? undefined;
 
-    await interaction.editReply('📰 Gathering intel from league sources...');
+    // Loading embed
+    await interaction.editReply({
+      embeds: [createEmbed(COLORS.NAVY)
+        .setTitle('📰 Word on the Street | Gathering Intel...')
+        .setDescription('League sources are talking... (~15 seconds)')]
+    });
 
     const result = await generateTradeRumors(
       league.id,
@@ -53,29 +62,50 @@ export const execute = async (
       weeksToDeadline
     );
 
-    const rumorHeader = '📰 **WORD ON THE STREET** | AccessGrantedSportz\n━━━━━━━━━━━━━━━━━━━━━━\n';
-    const rumorChunks = splitMessage(rumorHeader + result.rumors, 2000);
-    await interaction.editReply(rumorChunks[0]);
-    for (let i = 1; i < rumorChunks.length; i++) {
-      await interaction.followUp(rumorChunks[i]);
+    // Rumors embed
+    const rumorsEmbed = createEmbed(COLORS.NAVY)
+      .setTitle(`📰 Word on the Street | ${league.name}`)
+      .setDescription(
+        `Week ${league.current_week} | Season ${league.current_season}`
+      )
+      .addFields({
+        name:   '🔍 League Rumors',
+        value:  result.rumors.slice(0, 1024),
+        inline: false
+      });
+
+    await interaction.editReply({ embeds: [rumorsEmbed] });
+
+    // Hot takes embed
+    const takesEmbed = createEmbed(COLORS.ORANGE)
+      .setTitle('🔥 Hot Takes | Word on the Street')
+      .setDescription(result.hot_takes.slice(0, 4096));
+
+    await interaction.followUp({ embeds: [takesEmbed] });
+
+    // Overflow rumors if needed
+    if (result.rumors.length > 1024) {
+      await interaction.followUp({
+        embeds: [createEmbed(COLORS.NAVY)
+          .setDescription(result.rumors.slice(1024, 4096))]
+      });
     }
 
-    const takesHeader = '\n🔥 **HOT TAKES** | Word on the Street\n━━━━━━━━━━━━━━━━━━━━━━\n';
-    const takesChunks = splitMessage(takesHeader + result.hot_takes, 2000);
-    for (const chunk of takesChunks) {
-      await interaction.followUp(chunk);
-    }
-
+    // Deadline report if triggered
     if (result.deadline_report) {
-      const deadlineHeader = '\n🚨 **DEADLINE ALERT** | Word on the Street\n━━━━━━━━━━━━━━━━━━━━━━\n';
-      const deadlineChunks = splitMessage(deadlineHeader + result.deadline_report, 2000);
-      for (const chunk of deadlineChunks) {
-        await interaction.followUp(chunk);
-      }
+      const deadlineEmbed = createEmbed(COLORS.DANGER)
+        .setTitle('🚨 Trade Deadline Alert | Word on the Street')
+        .setDescription(result.deadline_report.slice(0, 4096));
+
+      await interaction.followUp({ embeds: [deadlineEmbed] });
     }
 
   } catch (error) {
     console.error('Rumors command error:', error);
-    await interaction.editReply('❌ Error generating rumors. Try again later.');
+    await interaction.editReply({
+      embeds: [createEmbed(COLORS.DANGER)
+        .setTitle('❌ Error')
+        .setDescription('Error generating rumors. Please try again.')]
+    });
   }
 };

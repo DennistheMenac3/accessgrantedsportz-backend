@@ -4,6 +4,7 @@ import {
 } from 'discord.js';
 import { query } from '../../config/database';
 import { v4 as uuidv4 } from 'uuid';
+import { COLORS, createEmbed } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -43,28 +44,21 @@ export const execute = async (
   try {
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
-      await interaction.editReply('❌ No league connected.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('❌ No League Connected')
+          .setDescription('No league is connected to this server.')]
+      });
       return;
     }
 
-    // Check if user is the commissioner
     const ownerCheck = await query(
       `SELECT owner_id FROM leagues WHERE id = $1`,
       [league.id]
     );
 
-    const discordUserId = interaction.user.id;
-    const userResult    = await query(
-      `SELECT id, username FROM users
-       WHERE discord_user_id = $1`,
-      [discordUserId]
-    );
-
-    // Generate invite code
     const inviteCode = generateInviteCode();
-    const expiresAt  = new Date(
-      Date.now() + 30 * 24 * 60 * 60 * 1000
-    );
+    const expiresAt  = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
     await query(
       `INSERT INTO league_invites (
@@ -82,28 +76,44 @@ export const execute = async (
       ]
     );
 
-    const frontendUrl = process.env.FRONTEND_URL || 'https://accessgrantedsportz.com';
+    const frontendUrl = process.env.FRONTEND_URL ||
+      'https://accessgrantedsportz.com';
     const inviteUrl   = `${frontendUrl}/invite/${inviteCode}`;
 
-    let response = `🎟️ **League Invite Created!**\n\n`;
-    response += `**League:** ${league.name}\n`;
-    response += `**Invite Code:** \`${inviteCode}\`\n`;
-    response += `**Expires:** ${expiresAt.toLocaleDateString()}\n`;
-    response += `**Spots:** 32 available\n\n`;
-    response += `**Share this message in your league:**\n\n`;
-    response += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-    response += `🏈 **Join ${league.name} on AccessGrantedSportz!**\n\n`;
-    response += `1. Go to **${inviteUrl}**\n`;
-    response += `2. Create your account\n`;
-    response += `3. Pick your team\n`;
-    response += `4. Start tracking your franchise!\n\n`;
-    response += `**Invite Code:** \`${inviteCode}\`\n`;
-    response += `━━━━━━━━━━━━━━━━━━━━━━`;
+    // Commissioner sees full details (ephemeral)
+    const commishEmbed = createEmbed(COLORS.GOLD)
+      .setTitle('🎟️ Invite Created!')
+      .setDescription(
+        `Share the message below in your league Discord or ` +
+        `send the link directly to new members.`
+      )
+      .addFields(
+        { name: '🏈 League',      value: league.name,                        inline: true },
+        { name: '🔑 Code',        value: `\`${inviteCode}\``,                inline: true },
+        { name: '📅 Expires',     value: expiresAt.toLocaleDateString(),     inline: true },
+        { name: '👥 Spots',       value: '32 available',                     inline: true },
+        { name: '🔗 Invite Link', value: inviteUrl,                          inline: false },
+        {
+          name:  '📋 Share This With Your League',
+          value:
+            `🏈 **Join ${league.name} on AccessGrantedSportz!**\n\n` +
+            `1. Click the link: **${inviteUrl}**\n` +
+            `2. Login with Discord\n` +
+            `3. Pick your team\n` +
+            `4. Start tracking your franchise!\n\n` +
+            `**Code:** \`${inviteCode}\` | Expires ${expiresAt.toLocaleDateString()}`,
+          inline: false
+        }
+      );
 
-    await interaction.editReply(response);
+    await interaction.editReply({ embeds: [commishEmbed] });
 
   } catch (error) {
     console.error('Invite command error:', error);
-    await interaction.editReply('❌ Error generating invite.');
+    await interaction.editReply({
+      embeds: [createEmbed(COLORS.DANGER)
+        .setTitle('❌ Error')
+        .setDescription('Error generating invite. Please try again.')]
+    });
   }
 };
