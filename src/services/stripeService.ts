@@ -2,9 +2,11 @@ import Stripe from 'stripe';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-export const PRICE_IDS = {
-  pro:   process.env.STRIPE_PRO_PRICE_ID!,
-  elite: process.env.STRIPE_ELITE_PRICE_ID!
+export const PRICE_IDS: { [key: string]: string } = {
+  pro:          process.env.STRIPE_PRO_PRICE_ID!,
+  pro_annual:   process.env.STRIPE_PRO_ANNUAL_PRICE_ID!,
+  elite:        process.env.STRIPE_ELITE_PRICE_ID!,
+  elite_annual: process.env.STRIPE_ELITE_ANNUAL_PRICE_ID!
 };
 
 // =============================================

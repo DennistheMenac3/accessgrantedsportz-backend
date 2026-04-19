@@ -23,13 +23,13 @@ router.post('/checkout', protect, async (req: any, res: any) => {
     const { tier, league_id } = req.body;
     const userId              = req.user.id;
 
-    if (!['pro', 'elite'].includes(tier)) {
-      res.status(400).json({
-        success: false,
-        message: 'Invalid tier. Must be pro or elite.'
-      });
-      return;
-    }
+    if (!['pro', 'pro_annual', 'elite', 'elite_annual'].includes(tier)) {
+  res.status(400).json({
+    success: false,
+    message: 'Invalid tier.'
+  });
+  return;
+}
 
     const userResult = await query(
       `SELECT email FROM users WHERE id = $1`,
