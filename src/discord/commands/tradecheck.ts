@@ -3,6 +3,8 @@ import {
   ChatInputCommandInteraction
 } from 'discord.js';
 import { query } from '../../config/database';
+import { generateTradeAdvice } from '../../services/aiStorylineService';
+import { splitMessage, postToChannel } from '../bot';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -17,35 +19,51 @@ const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   return result.rows[0] || null;
 };
 
-const getStoredValue = async (
-  playerId: string,
+const findPlayer = async (
+  name:     string,
   leagueId: string
-): Promise<number> => {
+): Promise<any | null> => {
   const result = await query(
-    `SELECT COALESCE(total_value, 0) as total_value
-     FROM trade_value_history
-     WHERE player_id = $1
-     AND league_id = $2
-     ORDER BY calculated_at DESC
+    `SELECT
+      p.id, p.first_name, p.last_name,
+      p.position, p.overall_rating,
+      p.dev_trait, p.age, p.speed,
+      p.team_id,
+      t.name         as team_name,
+      t.abbreviation as team_abbr,
+      t.wins, t.losses,
+      COALESCE(tvh.total_value, 0) as trade_value
+     FROM players p
+     LEFT JOIN teams t ON t.id = p.team_id
+     LEFT JOIN trade_value_history tvh
+       ON tvh.player_id  = p.id
+       AND tvh.league_id = p.league_id
+     WHERE p.league_id = $1
+     AND (
+       LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER('%' || $2 || '%')
+       OR LOWER(p.first_name) LIKE LOWER('%' || $2 || '%')
+       OR LOWER(p.last_name)  LIKE LOWER('%' || $2 || '%')
+     )
+     ORDER BY tvh.calculated_at DESC
      LIMIT 1`,
-    [playerId, leagueId]
+    [leagueId, name]
   );
-  return parseFloat(result.rows[0]?.total_value || 0);
+  return result.rows[0] || null;
 };
 
 export const data = new SlashCommandBuilder()
   .setName('tradecheck')
-  .setDescription('⚖️ Analyze if a trade is fair')
+  .setDescription('⚖️ AI-powered trade analysis with full roster context')
   .addStringOption(option =>
     option
       .setName('offering')
-      .setDescription('Player you are offering (first last)')
+      .setDescription('Player you are offering')
       .setRequired(true)
   )
   .addStringOption(option =>
     option
       .setName('requesting')
-      .setDescription('Player you want in return (first last)')
+      .setDescription('Player you want in return')
       .setRequired(true)
   );
 
@@ -60,8 +78,6 @@ export const execute = async (
 
   try {
     console.log('🔍 Tradecheck called by:', interaction.user.username);
-    console.log('🔍 Offering:', interaction.options.getString('offering'));
-    console.log('🔍 Requesting:', interaction.options.getString('requesting'));
 
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
@@ -72,31 +88,12 @@ export const execute = async (
     const offeringName   = interaction.options.getString('offering',   true);
     const requestingName = interaction.options.getString('requesting', true);
 
-    const findPlayer = async (name: string) => {
-      const result = await query(
-        `SELECT
-          p.id, p.first_name, p.last_name,
-          p.position, p.overall_rating,
-          p.dev_trait, p.age, p.speed,
-          t.name as team_name
-         FROM players p
-         LEFT JOIN teams t ON t.id = p.team_id
-         WHERE p.league_id = $1
-         AND (
-           LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER($2)
-           OR LOWER(p.first_name) LIKE LOWER($2)
-           OR LOWER(p.last_name) LIKE LOWER($2)
-           OR LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER('%' || $2 || '%')
-         )
-         LIMIT 1`,
-        [league.id, name]
-      );
-      return result.rows[0] || null;
-    };
+    console.log('🔍 Offering:', offeringName);
+    console.log('🔍 Requesting:', requestingName);
 
     const [offered, requested] = await Promise.all([
-      findPlayer(offeringName),
-      findPlayer(requestingName)
+      findPlayer(offeringName,   league.id),
+      findPlayer(requestingName, league.id)
     ]);
 
     if (!offered) {
@@ -108,68 +105,80 @@ export const execute = async (
       return;
     }
 
-    // Use stored values — fast database lookup
-    const [offeredValue, requestedValue] = await Promise.all([
-      getStoredValue(offered.id,   league.id),
-      getStoredValue(requested.id, league.id)
-    ]);
-
-    const difference = offeredValue - requestedValue;
-    const absDiff    = Math.abs(difference);
-
-    const fairness =
-      absDiff <= 10  ? '✅ FAIR TRADE'              :
-      absDiff <= 25  ? '🟡 SLIGHTLY UNEVEN'         :
-      absDiff <= 50  ? '🟠 CLEAR ADVANTAGE'         :
-      absDiff <= 100 ? '🔴 LOPSIDED'                :
-      '🚨 HIGHWAY ROBBERY';
-
-    const advice =
-      absDiff <= 10  ? 'Balanced trade — pull the trigger!'          :
-      absDiff <= 25  ? 'Close but not even. Try adding a pick.'      :
-      absDiff <= 50  ? 'Significant value gap. Negotiate harder.'    :
-      absDiff <= 100 ? 'Walk away or demand major additions.'        :
-      difference > 0 ? 'You\'re getting robbed. Do NOT do this.'    :
-      'You\'re stealing. Do this immediately!';
-
-    const whoWins =
-      absDiff <= 10  ? 'Neither side'                                :
-      difference > 0 ? `${requested.first_name} ${requested.last_name}'s team` :
-      `${offered.first_name} ${offered.last_name}'s team`;
+    console.log('✅ Players found:', offered.first_name, 'vs', requested.first_name);
 
     const devLabel = (dev: string) =>
       dev === 'xfactor'   ? '⚡ XFactor'  :
       dev === 'superstar' ? '⭐ Superstar' :
       dev === 'star'      ? '🌟 Star'      : '📋 Normal';
 
+    // Show loading message
+    await interaction.editReply(
+      `⏳ **AI analyzing trade...**\n` +
+      `${offered.first_name} ${offered.last_name} ↔️ ` +
+      `${requested.first_name} ${requested.last_name}\n` +
+      `Checking rosters, needs, draft capital... (~15 seconds)`
+    );
+
+    console.log('🔍 Calling generateTradeAdvice...');
+
+    // Get AI trade advice with full roster context
+    const advice = await generateTradeAdvice(
+      [offered.id],
+      [requested.id],
+      league.id,
+      league.current_season
+    );
+
+    console.log('✅ AI advice received:', advice.verdict);
+
+    const offeredValue   = parseFloat(offered.trade_value  || '0');
+    const requestedValue = parseFloat(requested.trade_value || '0');
+    const difference     = offeredValue - requestedValue;
+    const absDiff        = Math.abs(difference);
+
     let response = `⚖️ **TRADE ANALYSIS** | AccessGrantedSportz\n`;
     response += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
     response += `**YOU OFFER:**\n`;
     response += `🏈 **${offered.first_name} ${offered.last_name}**\n`;
-    response += `${offered.position} | ${offered.team_name}\n`;
-    response += `OVR: ${offered.overall_rating} | Age: ${offered.age} | Spd: ${offered.speed}\n`;
-    response += `${devLabel(offered.dev_trait)}\n`;
-    response += `💰 Trade Value: **${offeredValue.toFixed(1)}**\n\n`;
+    response += `${offered.position} | ${offered.team_name} `;
+    response += `(${offered.wins}-${offered.losses})\n`;
+    response += `OVR: ${offered.overall_rating} | Age: ${offered.age} | `;
+    response += `Spd: ${offered.speed} | ${devLabel(offered.dev_trait)}\n`;
+    response += `💰 TVS: **${offeredValue.toFixed(1)}**\n\n`;
 
     response += `**YOU RECEIVE:**\n`;
     response += `🏈 **${requested.first_name} ${requested.last_name}**\n`;
-    response += `${requested.position} | ${requested.team_name}\n`;
-    response += `OVR: ${requested.overall_rating} | Age: ${requested.age} | Spd: ${requested.speed}\n`;
-    response += `${devLabel(requested.dev_trait)}\n`;
-    response += `💰 Trade Value: **${requestedValue.toFixed(1)}**\n\n`;
+    response += `${requested.position} | ${requested.team_name} `;
+    response += `(${requested.wins}-${requested.losses})\n`;
+    response += `OVR: ${requested.overall_rating} | Age: ${requested.age} | `;
+    response += `Spd: ${requested.speed} | ${devLabel(requested.dev_trait)}\n`;
+    response += `💰 TVS: **${requestedValue.toFixed(1)}**\n\n`;
 
     response += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-    response += `**VERDICT:** ${fairness}\n`;
-    response += `Value Gap: **${absDiff.toFixed(1)} points**\n`;
-    response += `Winner: **${whoWins}**\n\n`;
-    response += `💡 ${advice}\n\n`;
-    response += `*Powered by AccessGrantedSportz Trade Engine*`;
+    response += `**VERDICT:** ${advice.verdict}\n`;
+    response += `**Value Gap:** ${absDiff.toFixed(1)} points\n`;
+    response += `**Winner:** ${advice.winner}\n\n`;
 
-    await interaction.editReply(response);
+    response += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+    response += `🤖 **AI TRADE ADVISOR:**\n\n`;
+    response += advice.advice;
+    response += `\n\n*Powered by AccessGrantedSportz Trade Engine*`;
+
+    const chunks = splitMessage(response, 2000);
+    await interaction.editReply(chunks[0]);
+
+    for (let i = 1; i < chunks.length; i++) {
+      await postToChannel(interaction.channelId!, chunks[i]);
+    }
 
   } catch (error) {
-    console.error('Tradecheck error:', error);
-    await interaction.editReply('❌ Error analyzing trade.');
+    console.error('❌ Tradecheck error:', error);
+    try {
+      await interaction.editReply('❌ Error analyzing trade. Please try again.');
+    } catch {
+      // Ignore
+    }
   }
 };
