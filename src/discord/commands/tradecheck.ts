@@ -52,9 +52,17 @@ export const data = new SlashCommandBuilder()
 export const execute = async (
   interaction: ChatInputCommandInteraction
 ) => {
-  await interaction.deferReply();
+  try {
+    await interaction.deferReply();
+  } catch {
+    return;
+  }
 
   try {
+    console.log('🔍 Tradecheck called by:', interaction.user.username);
+    console.log('🔍 Offering:', interaction.options.getString('offering'));
+    console.log('🔍 Requesting:', interaction.options.getString('requesting'));
+
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
       await interaction.editReply('❌ No league connected.');
