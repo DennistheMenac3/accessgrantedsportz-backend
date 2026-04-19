@@ -5,8 +5,7 @@ import { query } from '../config/database';
 import {
   createCheckoutSession,
   createPortalSession,
-  constructWebhookEvent,
-  getSubscription
+  constructWebhookEvent
 } from '../services/stripeService';
 
 const router = Router();
@@ -14,10 +13,13 @@ const router = Router();
 // =============================================
 // CREATE CHECKOUT SESSION
 // POST /api/stripe/checkout
-// User clicks "Upgrade" — redirects to Stripe
 // =============================================
 router.post('/checkout', protect, async (req: any, res: any) => {
   try {
+    console.log('💳 STRIPE_PRO_PRICE_ID:', process.env.STRIPE_PRO_PRICE_ID);
+    console.log('💳 STRIPE_ELITE_PRICE_ID:', process.env.STRIPE_ELITE_PRICE_ID);
+    console.log('💳 STRIPE_SECRET_KEY starts with:', process.env.STRIPE_SECRET_KEY?.substring(0, 7));
+
     const { tier, league_id } = req.body;
     const userId              = req.user.id;
 
@@ -29,7 +31,6 @@ router.post('/checkout', protect, async (req: any, res: any) => {
       return;
     }
 
-    // Get user and league info
     const userResult = await query(
       `SELECT email FROM users WHERE id = $1`,
       [userId]
@@ -64,11 +65,12 @@ router.post('/checkout', protect, async (req: any, res: any) => {
       checkout_url: checkoutUrl
     });
 
-  } catch (error) {
-    console.error('Checkout error:', error);
+  } catch (error: any) {
+    console.error('Checkout error:', error?.message || error);
     res.status(500).json({
       success: false,
-      message: 'Error creating checkout session.'
+      message: 'Error creating checkout session.',
+      error:   error?.message
     });
   }
 });
@@ -76,7 +78,6 @@ router.post('/checkout', protect, async (req: any, res: any) => {
 // =============================================
 // CUSTOMER PORTAL
 // POST /api/stripe/portal
-// User manages their subscription
 // =============================================
 router.post('/portal', protect, async (req: any, res: any) => {
   try {
@@ -114,8 +115,8 @@ router.post('/portal', protect, async (req: any, res: any) => {
       portal_url: portalUrl
     });
 
-  } catch (error) {
-    console.error('Portal error:', error);
+  } catch (error: any) {
+    console.error('Portal error:', error?.message);
     res.status(500).json({
       success: false,
       message: 'Error creating portal session.'
@@ -170,8 +171,6 @@ router.get('/status/:leagueId', protect, async (req: any, res: any) => {
 // =============================================
 // STRIPE WEBHOOK
 // POST /api/stripe/webhook
-// Stripe calls this when payment events happen
-// IMPORTANT: uses raw body not JSON parsed
 // =============================================
 router.post(
   '/webhook',
@@ -193,21 +192,20 @@ router.post(
     try {
       switch (event.type) {
 
-        // Payment succeeded — activate subscription
         case 'checkout.session.completed': {
           const session    = event.data.object as any;
           const leagueId   = session.metadata?.league_id;
-          const tier        = session.metadata?.tier;
-          const customerId  = session.customer;
-          const subId       = session.subscription;
+          const tier       = session.metadata?.tier;
+          const customerId = session.customer;
+          const subId      = session.subscription;
 
           if (leagueId && tier) {
             await query(
               `UPDATE leagues SET
-                subscription_tier        = $1,
-                stripe_customer_id       = $2,
-                stripe_subscription_id   = $3,
-                subscription_expires_at  = NOW() + INTERVAL '1 month'
+                subscription_tier       = $1,
+                stripe_customer_id      = $2,
+                stripe_subscription_id  = $3,
+                subscription_expires_at = NOW() + INTERVAL '1 month'
                WHERE id = $4`,
               [tier, customerId, subId, leagueId]
             );
@@ -216,11 +214,9 @@ router.post(
           break;
         }
 
-        // Subscription renewed — extend expiry
         case 'invoice.payment_succeeded': {
           const invoice = event.data.object as any;
           const subId   = invoice.subscription;
-
           if (subId) {
             await query(
               `UPDATE leagues SET
@@ -233,18 +229,14 @@ router.post(
           break;
         }
 
-        // Payment failed — notify but keep access briefly
         case 'invoice.payment_failed': {
           const invoice = event.data.object as any;
-          const subId   = invoice.subscription;
-          console.log(`⚠️ Payment failed for subscription ${subId}`);
+          console.log(`⚠️ Payment failed for subscription ${invoice.subscription}`);
           break;
         }
 
-        // Subscription cancelled — downgrade to free
         case 'customer.subscription.deleted': {
           const subscription = event.data.object as any;
-
           await query(
             `UPDATE leagues SET
               subscription_tier       = 'free',
@@ -257,7 +249,6 @@ router.post(
           break;
         }
 
-        // Subscription updated — handle tier changes
         case 'customer.subscription.updated': {
           const subscription = event.data.object as any;
           console.log(`📦 Subscription updated: ${subscription.id}`);
@@ -281,61 +272,61 @@ router.post(
 // HELPER — Get features for tier
 // =============================================
 const getTierFeatures = (tier: string) => {
-  const features = {
+  const features: any = {
     free: {
-      standings:    true,
-      scores:       true,
-      value:        true,
-      compare:      true,
-      invite:       true,
-      recap:        false,
-      rankings:     false,
-      rumors:       false,
-      scout:        false,
-      gems:         false,
-      tradecheck:   false,
-      awards:       false,
-      leaders:      false,
-      max_members:  10,
-      max_leagues:  1
+      standings:   true,
+      scores:      true,
+      value:       true,
+      compare:     true,
+      invite:      true,
+      recap:       false,
+      rankings:    false,
+      rumors:      false,
+      scout:       false,
+      gems:        false,
+      tradecheck:  false,
+      awards:      false,
+      leaders:     false,
+      max_members: 10,
+      max_leagues: 1
     },
     pro: {
-      standings:    true,
-      scores:       true,
-      value:        true,
-      compare:      true,
-      invite:       true,
-      recap:        true,
-      rankings:     true,
-      rumors:       true,
-      scout:        false,
-      gems:         false,
-      tradecheck:   false,
-      awards:       true,
-      leaders:      true,
-      max_members:  32,
-      max_leagues:  1
+      standings:   true,
+      scores:      true,
+      value:       true,
+      compare:     true,
+      invite:      true,
+      recap:       true,
+      rankings:    true,
+      rumors:      true,
+      scout:       false,
+      gems:        false,
+      tradecheck:  false,
+      awards:      true,
+      leaders:     true,
+      max_members: 32,
+      max_leagues: 1
     },
     elite: {
-      standings:    true,
-      scores:       true,
-      value:        true,
-      compare:      true,
-      invite:       true,
-      recap:        true,
-      rankings:     true,
-      rumors:       true,
-      scout:        true,
-      gems:         true,
-      tradecheck:   true,
-      awards:       true,
-      leaders:      true,
-      max_members:  32,
-      max_leagues:  3
+      standings:   true,
+      scores:      true,
+      value:       true,
+      compare:     true,
+      invite:      true,
+      recap:       true,
+      rankings:    true,
+      rumors:      true,
+      scout:       true,
+      gems:        true,
+      tradecheck:  true,
+      awards:      true,
+      leaders:     true,
+      max_members: 32,
+      max_leagues: 3
     }
   };
 
-  return features[tier as keyof typeof features] || features.free;
+  return features[tier] || features.free;
 };
 
 export default router;
