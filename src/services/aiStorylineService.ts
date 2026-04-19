@@ -1886,3 +1886,206 @@ ${contractDumps.slice(0, 5).map((p: any) => `${p.name} (${p.position}, ${p.team_
     full_report:       fullReport
   };
 };
+
+// =============================================
+// AI TRADE ADVISOR
+// Analyzes trade with full roster context
+// =============================================
+export const generateTradeAdvice = async (
+  offeredPlayerIds:   string[],
+  requestedPlayerIds: string[],
+  leagueId:           string,
+  season:             number
+): Promise<{
+  advice:  string;
+  verdict: string;
+  winner:  string;
+}> => {
+
+  const getPlayerInfo = async (playerIds: string[]) => {
+    const players = [];
+    for (const id of playerIds) {
+      const result = await query(
+        `SELECT p.*,
+          t.name         as team_name,
+          t.abbreviation as team_abbr,
+          t.wins, t.losses,
+          tvh.total_value
+         FROM players p
+         LEFT JOIN teams t ON t.id = p.team_id
+         LEFT JOIN trade_value_history tvh
+           ON tvh.player_id = p.id
+           AND tvh.league_id = $2
+         WHERE p.id = $1
+         ORDER BY tvh.calculated_at DESC
+         LIMIT 1`,
+        [id, leagueId]
+      );
+      if (result.rows.length > 0) players.push(result.rows[0]);
+    }
+    return players;
+  };
+
+  const offeredPlayers   = await getPlayerInfo(offeredPlayerIds);
+  const requestedPlayers = await getPlayerInfo(requestedPlayerIds);
+
+  if (!offeredPlayers.length || !requestedPlayers.length) {
+    throw new Error('Players not found');
+  }
+
+  const getTeamRoster = async (teamId: string) => {
+    const result = await query(
+      `SELECT p.first_name, p.last_name, p.position,
+        p.overall_rating, p.age, p.dev_trait, p.speed,
+        COALESCE(tvh.total_value, 0) as trade_value
+       FROM players p
+       LEFT JOIN trade_value_history tvh
+         ON tvh.player_id = p.id
+         AND tvh.league_id = $2
+       WHERE p.team_id = $1
+       ORDER BY p.overall_rating DESC`,
+      [teamId, leagueId]
+    );
+    return result.rows;
+  };
+
+  const getTeamDraftPicksForAdvice = async (teamId: string) => {
+    try {
+      const result = await query(
+        `SELECT dp.round, dp.pick_number, dp.trade_value,
+          ot.abbreviation as original_team_abbr
+         FROM draft_picks dp
+         JOIN teams ot ON ot.id = dp.original_team_id
+         WHERE dp.current_team_id = $1
+         AND dp.league_id         = $2
+         AND dp.season            = $3
+         AND dp.is_used           = false
+         AND dp.round             <= 3
+         ORDER BY dp.round ASC, dp.pick_number ASC`,
+        [teamId, leagueId, season]
+      );
+      return result.rows;
+    } catch {
+      return [];
+    }
+  };
+
+  const offeredTeamId   = offeredPlayers[0].team_id;
+  const requestedTeamId = requestedPlayers[0].team_id;
+
+  const [
+    offeredRoster,
+    requestedRoster,
+    offeredPicks,
+    requestedPicks
+  ] = await Promise.all([
+    getTeamRoster(offeredTeamId),
+    getTeamRoster(requestedTeamId),
+    getTeamDraftPicksForAdvice(offeredTeamId),
+    getTeamDraftPicksForAdvice(requestedTeamId)
+  ]);
+
+  const offeredValue = offeredPlayers.reduce(
+    (sum, p) => sum + parseFloat(p.total_value || 0), 0
+  );
+  const requestedValue = requestedPlayers.reduce(
+    (sum, p) => sum + parseFloat(p.total_value || 0), 0
+  );
+  const valueDiff = offeredValue - requestedValue;
+
+  const devLabel = (dev: string) =>
+    dev === 'xfactor'   ? 'XFactor'  :
+    dev === 'superstar' ? 'Superstar' :
+    dev === 'star'      ? 'Star'      : 'Normal';
+
+  const formatRoster = (roster: any[]) =>
+    roster.slice(0, 8).map(p =>
+      `${p.first_name} ${p.last_name} (${p.position} | ` +
+      `${p.overall_rating} OVR | ${devLabel(p.dev_trait)} | ` +
+      `TVS: ${parseFloat(p.trade_value || 0).toFixed(0)})`
+    ).join('\n');
+
+  const formatPicks = (picks: any[], teamAbbr: string) =>
+    picks.length === 0
+      ? 'No picks in rounds 1-3'
+      : picks.map(p =>
+          `Rd${p.round} #${p.pick_number} ` +
+          `${p.original_team_abbr !== teamAbbr
+            ? `(via ${p.original_team_abbr})` : ''}` +
+          ` TVS: ${p.trade_value}`
+        ).join('\n');
+
+  const prompt =
+    `You are the AccessGrantedSportz Trade Advisor — the most knowledgeable ` +
+    `Madden franchise trade analyst. Give direct, opinionated, specific advice.\n\n` +
+    `TRADE PROPOSAL:\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `OFFERING: ${offeredPlayers.map(p =>
+      `${p.first_name} ${p.last_name} | ${p.position} | ` +
+      `${p.team_name} (${p.wins}-${p.losses}) | ` +
+      `OVR: ${p.overall_rating} | Age: ${p.age} | ` +
+      `${devLabel(p.dev_trait)} | Speed: ${p.speed} | ` +
+      `TVS: ${parseFloat(p.total_value || 0).toFixed(1)}`
+    ).join(', ')}\n\n` +
+    `REQUESTING: ${requestedPlayers.map(p =>
+      `${p.first_name} ${p.last_name} | ${p.position} | ` +
+      `${p.team_name} (${p.wins}-${p.losses}) | ` +
+      `OVR: ${p.overall_rating} | Age: ${p.age} | ` +
+      `${devLabel(p.dev_trait)} | Speed: ${p.speed} | ` +
+      `TVS: ${parseFloat(p.total_value || 0).toFixed(1)}`
+    ).join(', ')}\n\n` +
+    `VALUE GAP: ${Math.abs(valueDiff).toFixed(1)} TVS ` +
+    `(${valueDiff > 0
+      ? 'Offering team overpaying'
+      : 'Receiving team overpaying'})\n\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `${offeredPlayers[0].team_name} ROSTER (top 8):\n` +
+    `${formatRoster(offeredRoster)}\n\n` +
+    `${offeredPlayers[0].team_name} DRAFT PICKS:\n` +
+    `${formatPicks(offeredPicks, offeredPlayers[0].team_abbr)}\n\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `${requestedPlayers[0].team_name} ROSTER (top 8):\n` +
+    `${formatRoster(requestedRoster)}\n\n` +
+    `${requestedPlayers[0].team_name} DRAFT PICKS:\n` +
+    `${formatPicks(requestedPicks, requestedPlayers[0].team_abbr)}\n\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `MADDEN RULES:\n` +
+    `- XFactor players are worth 40-60% more than overall suggests\n` +
+    `- Young XFactors under 25 are franchise cornerstones\n` +
+    `- Normal dev players depreciate fast — especially age 28+\n` +
+    `- Speed 90+ commands a premium at any position\n` +
+    `- 1st round pick = 75-180 TVS depending on slot\n` +
+    `- Consider team needs and roster depth\n\n` +
+    `Provide:\n` +
+    `1. Is this fair? (yes/no)\n` +
+    `2. Who wins and why — be specific\n` +
+    `3. What each team needs based on their roster\n` +
+    `4. Exactly what to add to make it fair (use real player names or picks)\n` +
+    `5. Final verdict — do this trade or not?\n\n` +
+    `Be direct and opinionated. Under 350 words. Use bullet points.\n` +
+    `Do NOT mention ESPN, First Take, or any media personalities.`;
+
+  const response = await anthropic.messages.create({
+    model:      'claude-sonnet-4-20250514',
+    max_tokens: 800,
+    messages:   [{ role: 'user', content: prompt }]
+  });
+
+  const advice = response.content[0].type === 'text'
+    ? response.content[0].text
+    : 'Unable to generate advice.';
+
+  const winner =
+    Math.abs(valueDiff) <= 10  ? 'Even trade'                   :
+    valueDiff > 0              ? requestedPlayers[0].team_name  :
+    offeredPlayers[0].team_name;
+
+  const verdict =
+    Math.abs(valueDiff) <= 10  ? '✅ FAIR'            :
+    Math.abs(valueDiff) <= 25  ? '🟡 SLIGHTLY UNEVEN' :
+    Math.abs(valueDiff) <= 50  ? '🟠 UNEVEN'          :
+    Math.abs(valueDiff) <= 100 ? '🔴 LOPSIDED'        :
+    '🚨 HIGHWAY ROBBERY';
+
+  return { advice, verdict, winner };
+};
