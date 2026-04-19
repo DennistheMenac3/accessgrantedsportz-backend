@@ -15,6 +15,8 @@ import { data as recapData }      from './commands/recap';
 import { data as scoresData }     from './commands/scores';
 import { data as tradecheckData } from './commands/tradecheck';
 import { data as inviteData }     from './commands/invite';
+import { data as joinData }  from './commands/join';
+import { data as claimData } from './commands/claim';
 
 const commands = [
   rankingsData.toJSON(),
@@ -29,7 +31,9 @@ const commands = [
   recapData.toJSON(),
   scoresData.toJSON(),
   tradecheckData.toJSON(),
-  inviteData.toJSON()
+  inviteData.toJSON(),
+  joinData.toJSON(),
+  claimData.toJSON(),
 ];
 
 const rest = new REST().setToken(
