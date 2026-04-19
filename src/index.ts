@@ -20,7 +20,8 @@ import awardsRoutes       from './routes/awardsRoutes';
 import storylineRoutes    from './routes/storylineRoutes';
 import inviteRoutes       from './routes/inviteRoutes';
 import leagueInviteRoutes from './routes/leagueInviteRoutes';
-import discordAuthRoutes from './routes/discordAuthRoutes';
+import discordAuthRoutes  from './routes/discordAuthRoutes';
+import stripeRoutes       from './routes/stripeRoutes';
 
 // Import Discord bot
 import { startBot, commands } from './discord/bot';
@@ -36,9 +37,9 @@ import { data as awardsCmd,     execute as awardsExec     } from './discord/comm
 import { data as recapCmd,      execute as recapExec      } from './discord/commands/recap';
 import { data as tradecheckCmd, execute as tradecheckExec } from './discord/commands/tradecheck';
 import { data as inviteCmd,     execute as inviteExec     } from './discord/commands/invite';
-import { data as scoresCmd, execute as scoresExec } from './discord/commands/scores';
-import { data as joinCmd,  execute as joinExec  } from './discord/commands/join';
-import { data as claimCmd, execute as claimExec } from './discord/commands/claim';
+import { data as scoresCmd,     execute as scoresExec     } from './discord/commands/scores';
+import { data as joinCmd,       execute as joinExec       } from './discord/commands/join';
+import { data as claimCmd,      execute as claimExec      } from './discord/commands/claim';
 
 // Import Scheduler
 import { startScheduler } from './services/schedulerService';
@@ -46,14 +47,30 @@ import { startScheduler } from './services/schedulerService';
 const app: Application = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+// =============================================
+// STRIPE WEBHOOK — Must be BEFORE express.json()
+// Needs raw body to verify signature
+// =============================================
+app.post(
+  '/api/stripe/webhook',
+  express.raw({ type: 'application/json' }),
+  (req, res, next) => {
+    (stripeRoutes as any).handle(req, res, next);
+  }
+);
+
+// =============================================
+// MIDDLEWARE
+// =============================================
 app.use(cors());
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health check route
+// =============================================
+// HEALTH CHECK
+// =============================================
 app.get('/', async (req: Request, res: Response) => {
   try {
     await pool.query('SELECT NOW()');
@@ -73,8 +90,12 @@ app.get('/', async (req: Request, res: Response) => {
   }
 });
 
-// API Routes
+// =============================================
+// API ROUTES
+// =============================================
 app.use('/api/auth',                         authRoutes);
+app.use('/api/auth',                         discordAuthRoutes);
+app.use('/api/stripe',                       stripeRoutes);
 app.use('/api/leagues',                      leagueRoutes);
 app.use('/api/leagues/:leagueId/teams',      teamRoutes);
 app.use('/api/leagues/:leagueId/players',    playerRoutes);
@@ -86,50 +107,49 @@ app.use('/api/leagues/:leagueId/storylines', storylineRoutes);
 app.use('/api/invites',                      inviteRoutes);
 app.use('/api/leagues/:leagueId/invites',    leagueInviteRoutes);
 app.use('/api/leagues/:leagueId/members',    leagueInviteRoutes);
-app.use('/api/auth', discordAuthRoutes);
 
-// Register all Discord commands
-commands.set(rankingsCmd.name,   { execute: rankingsExec });
-commands.set(rumorsCmd.name,     { execute: rumorsExec });
-commands.set(scoutCmd.name,      { execute: scoutExec });
-commands.set(standingsCmd.name,  { execute: standingsExec });
-commands.set(gemsCmd.name,       { execute: gemsExec });
-commands.set(leadersCmd.name,    { execute: leadersExec });
-commands.set(valueCmd.name,      { execute: valueExec });
-commands.set(compareCmd.name,    { execute: compareExec });
-commands.set(awardsCmd.name,     { execute: awardsExec });
-commands.set(recapCmd.name,      { execute: recapExec });
+// =============================================
+// DISCORD COMMANDS
+// =============================================
+commands.set(rankingsCmd.name,   { execute: rankingsExec   });
+commands.set(rumorsCmd.name,     { execute: rumorsExec     });
+commands.set(scoutCmd.name,      { execute: scoutExec      });
+commands.set(standingsCmd.name,  { execute: standingsExec  });
+commands.set(gemsCmd.name,       { execute: gemsExec       });
+commands.set(leadersCmd.name,    { execute: leadersExec    });
+commands.set(valueCmd.name,      { execute: valueExec      });
+commands.set(compareCmd.name,    { execute: compareExec    });
+commands.set(awardsCmd.name,     { execute: awardsExec     });
+commands.set(recapCmd.name,      { execute: recapExec      });
 commands.set(tradecheckCmd.name, { execute: tradecheckExec });
-commands.set(inviteCmd.name,     { execute: inviteExec });
-commands.set(scoresCmd.name, { execute: scoresExec });
-commands.set(joinCmd.name,  { execute: joinExec });
-commands.set(claimCmd.name, { execute: claimExec });
+commands.set(inviteCmd.name,     { execute: inviteExec     });
+commands.set(scoresCmd.name,     { execute: scoresExec     });
+commands.set(joinCmd.name,       { execute: joinExec       });
+commands.set(claimCmd.name,      { execute: claimExec      });
 
-// Start scheduler
+// =============================================
+// SCHEDULER + DISCORD BOT
+// =============================================
 startScheduler();
 
-// Start Discord bot
 if (process.env.DISCORD_BOT_TOKEN) {
   startBot();
   console.log('🤖 Discord bot starting...');
 }
 
-// Start server
+// =============================================
+// START SERVER
+// =============================================
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`🚀 AccessGrantedSportz backend is live!`);
-  console.log(`📡 Auth routes:       /api/auth/register, /api/auth/login`);
-  console.log(`📡 League routes:     /api/leagues`);
-  console.log(`📡 Team routes:       /api/leagues/:leagueId/teams`);
-  console.log(`📡 Player routes:     /api/leagues/:leagueId/players`);
-  console.log(`📡 Game routes:       /api/leagues/:leagueId/games`);
-  console.log(`📡 Trade routes:      /api/leagues/:leagueId/trades`);
-  console.log(`📡 Awards routes:     /api/leagues/:leagueId/awards`);
-  console.log(`📡 Ingestion routes:  /api/ingest/madden/:leagueId`);
-  console.log(`📡 Storyline routes:  /api/leagues/:leagueId/storylines`);
-  console.log(`📡 Invite routes:     /api/invites, /api/leagues/:leagueId/invites`);
-  console.log(`🤖 Discord: /rankings /rumors /scout /standings /gems /leaders /value /compare /awards /recap /scores /tradecheck /invite`);
-  
+  console.log(`📡 Auth:       /api/auth`);
+  console.log(`📡 Leagues:    /api/leagues`);
+  console.log(`📡 Stripe:     /api/stripe`);
+  console.log(`📡 Ingest:     /api/ingest/madden/:leagueId`);
+  console.log(`📡 Invites:    /api/invites`);
+  console.log(`💳 Stripe webhook: /api/stripe/webhook`);
+  console.log(`🤖 Discord: /rankings /rumors /scout /standings /gems /leaders /value /compare /awards /recap /scores /tradecheck /invite /join /claim`);
 });
 
 export default app;
