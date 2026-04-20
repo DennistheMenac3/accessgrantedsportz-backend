@@ -34,13 +34,17 @@ const normalizePosition = (position: string): string => {
 // =============================================
 // INGEST TEAMS
 // =============================================
-export const ingestTeams = async (leagueId: string, teamsData: any[]) => {
+export const ingestTeams = async (
+  leagueId: string,
+  teamsData: any[]
+): Promise<{ created: number; updated: number; teamIdMap: Map<number, string> }> => {
   const teamIdMap = new Map<number, string>();
   let created = 0;
   let updated = 0;
 
   for (const team of teamsData) {
     const div = getDivisionInfo(team.abbrName || '', `${team.cityName} ${team.nickName}`);
+    
     const result = await query(
       `INSERT INTO teams (
         id, league_id, name, abbreviation, city, overall_rating, 
@@ -50,15 +54,22 @@ export const ingestTeams = async (leagueId: string, teamsData: any[]) => {
       ON CONFLICT (league_id, abbreviation) DO UPDATE SET 
         overall_rating = EXCLUDED.overall_rating, 
         team_logo_url = EXCLUDED.team_logo_url, 
+        madden_id = EXCLUDED.madden_id,
         updated_at = CURRENT_TIMESTAMP
       RETURNING id, (xmax = 0) AS inserted`,
-      [uuidv4(), leagueId, team.nickName, team.abbrName, team.cityName, team.overallRating || 70, buildLogoUrl(team.logoId), intToHex(team.primaryColor), intToHex(team.secondaryColor), div?.conference || null, div?.division || null, team.teamId]
+      [
+        uuidv4(), leagueId, team.nickName, team.abbrName, team.cityName, 
+        team.overallRating || 70, buildLogoUrl(team.logoId), 
+        intToHex(team.primaryColor), intToHex(team.secondaryColor), 
+        div?.conference || null, div?.division || null, team.teamId
+      ]
     );
 
     teamIdMap.set(team.teamId, result.rows[0].id);
     if (result.rows[0].inserted) created++; else updated++;
   }
-  return { created, updated, teamIdMap, unassigned: [] };
+
+  return { created, updated, teamIdMap };
 };
 
 // =============================================
