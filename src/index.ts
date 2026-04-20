@@ -44,6 +44,7 @@ import { data as scoresCmd,     execute as scoresExec     } from './discord/comm
 import { data as joinCmd,       execute as joinExec       } from './discord/commands/join';
 import { data as claimCmd,      execute as claimExec      } from './discord/commands/claim';
 import { data as tradeCmd,      execute as tradeExec      } from './discord/commands/trade'; // NEW TRADE ENGINE
+import { data as playerCmd,     execute as playerExec,autocomplete as playerAutocomplete  } from './discord/commands/player';
 
 const app: Application = express();
 const PORT = process.env.PORT || 3000;
@@ -103,6 +104,7 @@ commands.set(scoresCmd.name,     { execute: scoresExec     });
 commands.set(joinCmd.name,       { execute: joinExec       });
 commands.set(claimCmd.name,      { execute: claimExec      });
 commands.set(tradeCmd.name,      { execute: tradeExec      }); // ADDED TRADE COMMAND
+commands.set(playerCmd.name,     {execute: playerExec,autocomplete: playerAutocomplete});
 
 // =============================================
 // 5. START SERVICES

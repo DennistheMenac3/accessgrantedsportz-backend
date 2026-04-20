@@ -15,8 +15,10 @@ import { data as recapData }      from './commands/recap';
 import { data as scoresData }     from './commands/scores';
 import { data as tradecheckData } from './commands/tradecheck';
 import { data as inviteData }     from './commands/invite';
-import { data as joinData }  from './commands/join';
-import { data as claimData } from './commands/claim';
+import { data as joinData }       from './commands/join';
+import { data as claimData }      from './commands/claim';
+import { data as tradeData }      from './commands/trade';
+import { data as playerData }     from './commands/player';
 
 const commands = [
   rankingsData.toJSON(),
@@ -34,11 +36,11 @@ const commands = [
   inviteData.toJSON(),
   joinData.toJSON(),
   claimData.toJSON(),
+  tradeData.toJSON(),
+  playerData.toJSON(),
 ];
 
-const rest = new REST().setToken(
-  process.env.DISCORD_BOT_TOKEN!
-);
+const rest = new REST().setToken(process.env.DISCORD_BOT_TOKEN!);
 
 const registerCommands = async () => {
   try {
@@ -59,7 +61,7 @@ const registerCommands = async () => {
     });
 
   } catch (error) {
-    console.error('Error registering commands:', error);
+    console.error('❌ Error registering commands:', error);
   }
 };
 
