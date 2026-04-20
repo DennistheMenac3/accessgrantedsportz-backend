@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDivisionInfo } from '../config/nflDivisions';
 
 // =============================================
-// Helper Functions
+// HELPER FUNCTIONS
 // =============================================
 const intToHex = (colorInt: number): string => {
   if (!colorInt) return '#000000';
@@ -66,7 +66,8 @@ export const ingestTeams = async (leagueId: string, teamsData: any[]) => {
 // =============================================
 export const ingestPlayers = async (leagueId: string, season: number, rostersData: any[], teamIdMap: Map<number, string>) => {
   let created = 0;
-  let statsProcessed = 0; // Renamed from 'updated' to satisfy the controller's type check
+  let updated = 0; // REVERTED: Using 'updated' to match your controller's expectation
+  const playerIdMap = new Map<number, string>();
 
   for (const player of rostersData) {
     const isFreeAgent = !player.teamId || player.teamId === 0;
@@ -83,15 +84,21 @@ export const ingestPlayers = async (leagueId: string, season: number, rostersDat
       ON CONFLICT (league_id, madden_id) DO UPDATE SET 
         team_id = EXCLUDED.team_id, 
         overall_rating = EXCLUDED.overall_rating, 
+        is_free_agent = EXCLUDED.is_free_agent,
+        is_practice_squad = EXCLUDED.is_practice_squad,
         updated_at = CURRENT_TIMESTAMP
       RETURNING id, (xmax = 0) AS inserted`,
       [uuidv4(), teamUuid, leagueId, player.rosterId, player.firstName, player.lastName, normalizePosition(player.position), player.overallRating || 70, player.age || 22, player.speed || 70, devTraitToString(player.devTrait), isFreeAgent, player.isOnPracticeSquad === true]
     );
 
-    if (upsertResult.rows[0].inserted) created++; else statsProcessed++;
-    await saveTraits(upsertResult.rows[0].id, season, player);
+    const playerId = upsertResult.rows[0].id;
+    playerIdMap.set(player.rosterId, playerId);
+    
+    if (upsertResult.rows[0].inserted) created++; else updated++;
+    await saveTraits(playerId, season, player);
   }
-  return { created, statsProcessed, playerIdMap: new Map() };
+  // This return object now perfectly matches the 'type' the error was complaining about
+  return { created, updated, playerIdMap, statsProcessed: updated }; 
 };
 
 // =============================================
@@ -106,16 +113,17 @@ export const ingestGames = async (leagueId: string, scoresData: any[], teamIdMap
     const awayId = teamIdMap.get(score.awayTeamId);
     if (!homeId || !awayId) continue;
 
-    const gameId = uuidv4();
     await query(
       `INSERT INTO games (id, league_id, home_team_id, away_team_id, home_score, away_score, week, season)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (league_id, home_team_id, away_team_id, week, season) DO NOTHING`,
-      [gameId, leagueId, homeId, awayId, score.homeScore, score.awayScore, score.weekIndex, score.seasonIndex]
+      [uuidv4(), leagueId, homeId, awayId, score.homeScore, score.awayScore, score.weekIndex, score.seasonIndex]
     );
 
     created++;
-    if (score.playerStats) statsProcessed += score.playerStats.length;
+    if (score.playerStats) {
+      statsProcessed += score.playerStats.length;
+    }
   }
   return { created, statsProcessed };
 };
