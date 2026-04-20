@@ -7,355 +7,120 @@ import {
 } from '../services/maddenIngestionService';
 import {
   autoPostGameRecap,
-  autoPostAwardUpdate,
-  autoPostRankings
+  autoPostAwardUpdate
 } from '../services/schedulerService';
 import { calculateAllAwards } from '../services/awardsService';
 
 const router = Router();
 
 // =============================================
-// VALIDATE API KEY MIDDLEWARE
-// All Madden export routes use this
-// =============================================
-const validateApiKey = async (
-  req: any,
-  res: any,
-  next: any
-): Promise<void> => {
-  const leagueId = req.params.leagueId;
-  const apiKey   = req.query.key as string;
-
-  if (!apiKey) {
-    res.status(401).json({
-      success: false,
-      message: 'API key required. Add ?key=YOUR_KEY to URL'
-    });
-    return;
-  }
-
-  const result = await query(
-    `SELECT * FROM leagues WHERE id = $1 AND api_key = $2`,
-    [leagueId, apiKey]
-  );
-
-  if (result.rows.length === 0) {
-    res.status(401).json({
-      success: false,
-      message: 'Invalid league ID or API key'
-    });
-    return;
-  }
-
-  req.league = result.rows[0];
-  next();
-};
-
-// =============================================
-// LEAGUE INFO EXPORT
-// POST /api/ingest/madden/:leagueId/leagueinfo
-// Receives: league settings + all 32 teams
+// THE EA COMPANION APP CATCH-ALL ENDPOINT
+// Catches /madden/:leagueId/:apiKey/ANYTHING_EA_APPENDS
 // =============================================
 router.post(
-  '/madden/:leagueId/leagueinfo',
-  validateApiKey,
+  '/madden/:leagueId/:apiKey/*',
   async (req: any, res: any) => {
     try {
-      const leagueId = req.params.leagueId;
-      const data     = req.body;
+      const { leagueId, apiKey } = req.params;
+      const data = req.body;
 
-      console.log(`📥 League info export received for ${req.league.name}`);
+      // 1. Validate the API Key extracted from the path
+      const authResult = await query(
+        `SELECT * FROM leagues WHERE id = $1 AND api_key = $2`,
+        [leagueId, apiKey]
+      );
 
-      // Madden sends teams in leagueTeamInfoList
-      const teams = 
-        data.leagueTeamInfoList?.leagueTeamInfo ||
-        data.teamInfoList?.teamInfo ||
-        data.teams || [];
-
-      if (teams.length === 0) {
-        res.status(400).json({
+      if (authResult.rows.length === 0) {
+        res.status(401).json({
           success: false,
-          message: 'No team data found in export'
+          message: 'Invalid league ID or API key'
         });
         return;
       }
 
-      const { created, updated, unassigned } = await ingestTeams(
-        leagueId,
-        teams
-      );
+      const league = authResult.rows[0];
+      const season = league.season || 1;
+      const channelId = league.discord_channel_id;
 
-      console.log(`✅ Teams processed: ${created} created, ${updated} updated`);
+      // 2. Identify the incoming payload
+      const teams = data.leagueTeamInfoList?.leagueTeamInfo || data.teamInfoList?.teamInfo || data.teams || [];
+      const players = data.rosterInfoList?.playerInfo || data.playerInfoList?.playerInfo || data.rosters || [];
+      const scores = data.scheduleInfoList?.scheduleInfo || data.gameInfoList?.gameInfo || data.scores || [];
 
-      res.status(200).json({
-        success:    true,
-        message:    'League info imported successfully',
-        created,
-        updated,
-        unassigned: unassigned.length > 0 ? unassigned : undefined
-      });
-
-    } catch (error) {
-      console.error('League info ingest error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error processing league info'
-      });
-    }
-  }
-);
-
-// =============================================
-// ROSTERS EXPORT
-// POST /api/ingest/madden/:leagueId/rosters
-// Receives: all player data
-// =============================================
-router.post(
-  '/madden/:leagueId/rosters',
-  validateApiKey,
-  async (req: any, res: any) => {
-    try {
-      const leagueId = req.params.leagueId;
-      const data     = req.body;
-      const season   = req.league.season || 1;
-
-      console.log(`📥 Rosters export received for ${req.league.name}`);
-
-      // Madden sends players in rosterInfoList
-      const players =
-        data.rosterInfoList?.playerInfo ||
-        data.playerInfoList?.playerInfo ||
-        data.rosters || [];
-
-      if (players.length === 0) {
-        res.status(400).json({
-          success: false,
-          message: 'No player data found in export'
-        });
+      if (teams.length === 0 && players.length === 0 && scores.length === 0) {
+        res.status(400).json({ success: false, message: 'Unrecognized export payload.' });
         return;
       }
 
-      // Get team ID map from existing teams
-      const teamsResult = await query(
-        `SELECT id, abbreviation FROM teams WHERE league_id = $1`,
-        [leagueId]
-      );
+      console.log(`📥 Madden export received for ${league.name}`);
+      const processedItems: string[] = [];
 
-      const teamIdMap = new Map<number, string>();
-      // Build map from Madden teamId to our UUID
-      // We match by abbreviation
-      const teamsByAbbr = new Map<string, string>();
-      teamsResult.rows.forEach((t: any) => {
-        teamsByAbbr.set(t.abbreviation, t.id);
-      });
-
-      // Map Madden teamIds
-      players.forEach((p: any) => {
-        if (p.teamId !== undefined) {
-          // Will be resolved during ingest
-        }
-      });
-
-      const { created, updated, playerIdMap } = await ingestPlayers(
-        leagueId,
-        season,
-        players,
-        teamIdMap
-      );
-
-      console.log(
-        `✅ Players processed: ${created} created, ${updated} updated`
-      );
-
-      res.status(200).json({
-        success: true,
-        message: 'Rosters imported successfully',
-        created,
-        updated
-      });
-
-    } catch (error) {
-      console.error('Rosters ingest error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error processing rosters'
-      });
-    }
-  }
-);
-
-// =============================================
-// WEEKLY STATS EXPORT
-// POST /api/ingest/madden/:leagueId/week
-// Receives: game scores + player stats for a week
-// Triggers: Discord auto-posts
-// =============================================
-router.post(
-  '/madden/:leagueId/week',
-  validateApiKey,
-  async (req: any, res: any) => {
-    try {
-      const leagueId = req.params.leagueId;
-      const data     = req.body;
-      const season   = req.league.season || 1;
-
-      console.log(`📥 Weekly stats export received for ${req.league.name}`);
-
-      // Madden sends scores in scheduleInfoList
-      const scores =
-        data.scheduleInfoList?.scheduleInfo ||
-        data.gameInfoList?.gameInfo ||
-        data.scores || [];
-
-      if (scores.length === 0) {
-        res.status(400).json({
-          success: false,
-          message: 'No game data found in export'
-        });
-        return;
+      // 3. Process Teams
+      if (teams.length > 0) {
+        const { created, updated } = await ingestTeams(leagueId, teams);
+        console.log(`✅ Teams: ${created} created, ${updated} updated`);
+        processedItems.push('Teams');
       }
 
-      // Get team and player ID maps
-      const teamsResult = await query(
-        `SELECT id, abbreviation FROM teams WHERE league_id = $1`,
-        [leagueId]
-      );
-      const playersResult = await query(
-        `SELECT id FROM players WHERE league_id = $1`,
-        [leagueId]
-      );
+      // 4. Process Rosters
+      if (players.length > 0) {
+        const teamsResult = await query(`SELECT id, madden_id FROM teams WHERE league_id = $1`, [leagueId]);
+        const teamIdMap = new Map<number, string>();
+        teamsResult.rows.forEach((t: any) => {
+          if (t.madden_id !== null) teamIdMap.set(t.madden_id, t.id);
+        });
 
-      const teamIdMap   = new Map<number, string>();
-      const playerIdMap = new Map<number, string>();
+        const { created, updated } = await ingestPlayers(leagueId, season, players, teamIdMap);
+        console.log(`✅ Rosters: ${created} created, ${updated} updated`);
+        processedItems.push('Rosters');
+      }
 
-      const { created, statsProcessed } = await ingestGames(
-        leagueId,
-        scores,
-        teamIdMap,
-        playerIdMap
-      );
+      // 5. Process Weekly Stats & Auto-Posts
+      if (scores.length > 0) {
+        const teamsResult = await query(`SELECT id, madden_id FROM teams WHERE league_id = $1`, [leagueId]);
+        const teamIdMap = new Map<number, string>();
+        teamsResult.rows.forEach((t: any) => {
+          if (t.madden_id !== null) teamIdMap.set(t.madden_id, t.id);
+        });
 
-      console.log(
-        `✅ Games processed: ${created} created, ` +
-        `${statsProcessed} stats processed`
-      );
+        const playersResult = await query(`SELECT id, madden_id FROM players WHERE league_id = $1`, [leagueId]);
+        const playerIdMap = new Map<number, string>();
+        playersResult.rows.forEach((p: any) => {
+          if (p.madden_id !== null) playerIdMap.set(p.madden_id, p.id);
+        });
 
-      // Send response immediately
-      res.status(200).json({
-        success: true,
-        message: 'Weekly stats imported successfully',
-        games_created:   created,
-        stats_processed: statsProcessed
-      });
+        const { created, statsProcessed } = await ingestGames(leagueId, scores, teamIdMap, playerIdMap);
+        console.log(`✅ Stats: ${created} games created, ${statsProcessed} stats logged`);
+        processedItems.push('Weekly Stats');
 
-      // Auto-post to Discord after response
-      const channelId = req.league.discord_channel_id;
-      if (channelId) {
-        try {
-          await calculateAllAwards(leagueId, season);
-
-          // Find games just created and post recaps
-          const recentGames = await query(
-            `SELECT id FROM games
-             WHERE league_id = $1
-             AND created_at > NOW() - INTERVAL '5 minutes'`,
-            [leagueId]
-          );
-
-          for (const game of recentGames.rows) {
-            await autoPostGameRecap(
-              leagueId,
-              game.id,
-              season,
-              channelId
+        // Trigger Discord integrations asynchronously
+        if (channelId) {
+          try {
+            await calculateAllAwards(leagueId, season);
+            const recentGames = await query(
+              `SELECT id FROM games WHERE league_id = $1 AND created_at > NOW() - INTERVAL '5 minutes'`,
+              [leagueId]
             );
-            await new Promise(r => setTimeout(r, 2000));
+            for (const game of recentGames.rows) {
+              await autoPostGameRecap(leagueId, game.id, season, channelId);
+              await new Promise(r => setTimeout(r, 2000));
+            }
+            await autoPostAwardUpdate(leagueId, channelId, season);
+          } catch (discordError) {
+            console.error('Discord auto-post error:', discordError);
           }
-
-          await autoPostAwardUpdate(leagueId, channelId, season);
-
-        } catch (discordError) {
-          console.error('Discord auto-post error:', discordError);
         }
       }
 
-    } catch (error) {
-      console.error('Weekly stats ingest error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error processing weekly stats'
-      });
-    }
-  }
-);
-
-// =============================================
-// LEGACY ENDPOINT — Keep for backward compat
-// POST /api/ingest/madden/:leagueId
-// =============================================
-router.post(
-  '/madden/:leagueId',
-  validateApiKey,
-  async (req: any, res: any) => {
-    try {
-      const leagueId = req.params.leagueId;
-      const {
-        leagueInfo,
-        teams,
-        rosters,
-        scores
-      } = req.body;
-
-      if (!teams || !rosters) {
-        res.status(400).json({
-          success: false,
-          message: 'Invalid export. Required: teams, rosters'
-        });
-        return;
-      }
-
-      const season = leagueInfo?.currentSeason || req.league.season || 1;
-
-      const {
-        created:   teamsCreated,
-        updated:   teamsUpdated,
-        teamIdMap
-      } = await ingestTeams(leagueId, teams);
-
-      const {
-        created:    playersCreated,
-        updated:    playersUpdated,
-        playerIdMap
-      } = await ingestPlayers(leagueId, season, rosters, teamIdMap);
-
-      let gamesCreated    = 0;
-      let statsProcessed  = 0;
-
-      if (scores?.length > 0) {
-        const gamesResult = await ingestGames(
-          leagueId,
-          scores,
-          teamIdMap,
-          playerIdMap
-        );
-        gamesCreated   = gamesResult.created;
-        statsProcessed = gamesResult.statsProcessed;
-      }
-
+      // Send success response
       res.status(200).json({
         success: true,
-        message: 'League data imported successfully',
-        teams:   { created: teamsCreated, updated: teamsUpdated },
-        players: { created: playersCreated, updated: playersUpdated },
-        games:   { created: gamesCreated, stats: statsProcessed }
+        message: `Successfully processed: ${processedItems.join(', ')}`
       });
 
     } catch (error) {
-      console.error('Legacy ingest error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error importing league data'
-      });
+      console.error('EA Ingest Error:', error);
+      res.status(500).json({ success: false, message: 'Server error processing export' });
     }
   }
 );

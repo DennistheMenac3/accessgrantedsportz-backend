@@ -59,8 +59,6 @@ const normalizePosition = (position: string): string => {
 
 // =============================================
 // Process teams from Madden export
-// Now includes division/conference mapping
-// Supports both standard and custom teams
 // =============================================
 export const ingestTeams = async (
   leagueId:  string,
@@ -77,29 +75,14 @@ export const ingestTeams = async (
   const teamIdMap = new Map<number, string>();
 
   for (const team of teamsData) {
-    // =============================================
-    // DIVISION DETECTION
-    // Layer 1: Try abbreviation
-    // Layer 2: Try team name keywords
-    // Layer 3: null — commissioner assigns manually
-    // =============================================
     const divisionInfo = getDivisionInfo(
       team.abbrName || '',
       `${team.cityName || ''} ${team.nickName || ''}`.trim()
     );
 
     if (!divisionInfo) {
-      unassigned.push(
-        `${team.cityName} ${team.nickName} (${team.abbrName})`
-      );
-      console.log(
-        `⚠️ Custom team detected — no division assigned: ` +
-        `${team.cityName} ${team.nickName} (${team.abbrName})`
-      );
-    } else {
-      console.log(
-        `✅ ${team.abbrName} → ${divisionInfo.division}`
-      );
+      unassigned.push(`${team.cityName} ${team.nickName} (${team.abbrName})`);
+      console.log(`⚠️ Custom team detected — no division assigned: ${team.cityName} ${team.nickName} (${team.abbrName})`);
     }
 
     const existing = await query(
@@ -123,8 +106,9 @@ export const ingestTeams = async (
           secondary_color = $6,
           conference      = COALESCE($7, conference),
           division        = COALESCE($8, division),
+          madden_id       = $9,
           updated_at      = CURRENT_TIMESTAMP
-         WHERE id = $9`,
+         WHERE id = $10`,
         [
           team.nickName,
           team.cityName,
@@ -134,7 +118,8 @@ export const ingestTeams = async (
           intToHex(team.secondaryColor),
           divisionInfo?.conference || null,
           divisionInfo?.division   || null,
-          teamId
+          team.teamId, // This sets madden_id = $9
+          teamId       // This sets id = $10
         ]
       );
       updated++;
@@ -153,11 +138,11 @@ export const ingestTeams = async (
           name, abbreviation, city,
           overall_rating, team_logo_url,
           primary_color, secondary_color,
-          conference, division
+          conference, division, madden_id
         )
         VALUES (
           $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, $10, $11, $12
+          $7, $8, $9, $10, $11, $12, $13
         )`,
         [
           newId,
@@ -171,7 +156,8 @@ export const ingestTeams = async (
           intToHex(team.primaryColor),
           intToHex(team.secondaryColor),
           divisionInfo?.conference || null,
-          divisionInfo?.division   || null
+          divisionInfo?.division   || null,
+          team.teamId // This passes the EA teamId as $13 (madden_id)
         ]
       );
       created++;
@@ -179,20 +165,15 @@ export const ingestTeams = async (
   }
 
   if (unassigned.length > 0) {
-    console.log(
-      `\n⚠️ ${unassigned.length} custom teams need manual division assignment:`
-    );
+    console.log(`\n⚠️ ${unassigned.length} custom teams need manual division assignment:`);
     unassigned.forEach(t => console.log(`   • ${t}`));
-    console.log(
-      `Use PUT /api/leagues/:leagueId/teams/:id/division to assign\n`
-    );
   }
 
   return { created, updated, teamIdMap, unassigned };
 };
 
 // =============================================
-// Process players from Madden export
+// Process players from Madden export (True Upsert)
 // =============================================
 export const ingestPlayers = async (
   leagueId:    string,
@@ -218,83 +199,82 @@ export const ingestPlayers = async (
       ? buildPortraitUrl(player.portraitId)
       : null;
 
-    const existing = await query(
-      `SELECT id FROM players
-       WHERE league_id = $1
-       AND first_name  = $2
-       AND last_name   = $3
-       AND position    = $4`,
-      [leagueId, player.firstName, player.lastName, position]
+    // Calculate current contract year and rookie status
+    const currentContractYear = (player.contractLength && player.contractYearsLeft)
+      ? (player.contractLength - player.contractYearsLeft + 1)
+      : 1;
+    
+    const isRookieDeal = player.yearsPro === 0 || player.yearsPro === 1 || player.isOnRookieDeal === true;
+
+    // We generate a new UUID here. If the player already exists,
+    // Postgres will ignore this UUID and return the existing one.
+    const newUuid = uuidv4();
+
+    // TRUE Upsert Query utilizing madden_id and Financials
+    const upsertResult = await query(
+      `INSERT INTO players (
+        id, team_id, league_id, madden_id,
+        first_name, last_name, position,
+        overall_rating, age, speed,
+        strength, awareness, dev_trait,
+        years_pro, headshot_url,
+        contract_years, contract_salary, contract_bonus, contract_year_current, is_on_rookie_deal
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 
+        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+      )
+      ON CONFLICT (league_id, madden_id) DO UPDATE SET
+        team_id               = EXCLUDED.team_id,
+        position              = EXCLUDED.position,
+        overall_rating        = EXCLUDED.overall_rating,
+        age                   = EXCLUDED.age,
+        speed                 = EXCLUDED.speed,
+        strength              = EXCLUDED.strength,
+        awareness             = EXCLUDED.awareness,
+        dev_trait             = EXCLUDED.dev_trait,
+        years_pro             = EXCLUDED.years_pro,
+        headshot_url          = EXCLUDED.headshot_url,
+        contract_years        = EXCLUDED.contract_years,
+        contract_salary       = EXCLUDED.contract_salary,
+        contract_bonus        = EXCLUDED.contract_bonus,
+        contract_year_current = EXCLUDED.contract_year_current,
+        is_on_rookie_deal     = EXCLUDED.is_on_rookie_deal,
+        updated_at            = CURRENT_TIMESTAMP
+      RETURNING id, (xmax = 0) AS inserted`,
+      [
+        newUuid,
+        teamId,
+        leagueId,
+        player.rosterId, // The crucial EA ID
+        player.firstName,
+        player.lastName,
+        position,
+        player.overallRating  || 70,
+        player.age            || 22,
+        player.speed          || 70,
+        player.strength       || 70,
+        player.awareness      || 70,
+        devTrait,
+        player.yearsPro       || 0,
+        portraitUrl,
+        player.contractLength || 1,             
+        player.contractSalary || 0,             
+        player.contractBonus  || 0,             
+        currentContractYear,                    
+        isRookieDeal                            
+      ]
     );
 
-    let playerId: string;
+    // Grab the UUID that was actually used
+    const playerId = upsertResult.rows[0].id;
+    playerIdMap.set(player.rosterId, playerId);
 
-    if (existing.rows.length > 0) {
-      playerId = existing.rows[0].id;
-      playerIdMap.set(player.rosterId, playerId);
-
-      await query(
-        `UPDATE players SET
-          team_id        = $1,
-          overall_rating = $2,
-          age            = $3,
-          speed          = $4,
-          strength       = $5,
-          awareness      = $6,
-          dev_trait      = $7,
-          years_pro      = $8,
-          headshot_url   = $9,
-          updated_at     = CURRENT_TIMESTAMP
-         WHERE id = $10`,
-        [
-          teamId,
-          player.overallRating || 70,
-          player.age           || 22,
-          player.speed         || 70,
-          player.strength      || 70,
-          player.awareness     || 70,
-          devTrait,
-          player.yearsPro      || 0,
-          portraitUrl,
-          playerId
-        ]
-      );
-      updated++;
-    } else {
-      playerId = uuidv4();
-      playerIdMap.set(player.rosterId, playerId);
-
-      await query(
-        `INSERT INTO players (
-          id, team_id, league_id,
-          first_name, last_name, position,
-          overall_rating, age, speed,
-          strength, awareness, dev_trait,
-          years_pro, headshot_url
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, $10, $11, $12,
-          $13, $14
-        )`,
-        [
-          playerId,
-          teamId,
-          leagueId,
-          player.firstName,
-          player.lastName,
-          position,
-          player.overallRating || 70,
-          player.age           || 22,
-          player.speed         || 70,
-          player.strength      || 70,
-          player.awareness     || 70,
-          devTrait,
-          player.yearsPro      || 0,
-          portraitUrl
-        ]
-      );
+    // Track metrics based on Postgres internal flags
+    if (upsertResult.rows[0].inserted) {
       created++;
+    } else {
+      updated++;
     }
 
     await saveTraits(playerId, season, player);
