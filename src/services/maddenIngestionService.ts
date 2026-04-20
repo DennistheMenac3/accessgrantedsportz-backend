@@ -77,7 +77,7 @@ export const ingestTeams = async (
 // =============================================
 export const ingestPlayers = async (leagueId: string, season: number, rostersData: any[], teamIdMap: Map<number, string>) => {
   let created = 0;
-  let updated = 0; // REVERTED: Using 'updated' to match your controller's expectation
+  let updated = 0;
   const playerIdMap = new Map<number, string>();
 
   for (const player of rostersData) {
@@ -85,6 +85,11 @@ export const ingestPlayers = async (leagueId: string, season: number, rostersDat
     const teamUuid = isFreeAgent ? null : teamIdMap.get(player.teamId);
 
     if (!isFreeAgent && !teamUuid) continue;
+
+    // EA Payload Mapping Definitions
+    const playerOvr = player.playerBestOvr || player.ovr || player.overallRating || 70;
+    const playerSpd = player.speed || player.speedRating || 70;
+    const playerAge = player.age || 22;
 
     const upsertResult = await query(
       `INSERT INTO players (
@@ -94,12 +99,18 @@ export const ingestPlayers = async (leagueId: string, season: number, rostersDat
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       ON CONFLICT (league_id, madden_id) DO UPDATE SET 
         team_id = EXCLUDED.team_id, 
-        overall_rating = EXCLUDED.overall_rating, 
+        overall_rating = EXCLUDED.overall_rating,
+        age = EXCLUDED.age,
+        speed = EXCLUDED.speed, 
         is_free_agent = EXCLUDED.is_free_agent,
         is_practice_squad = EXCLUDED.is_practice_squad,
         updated_at = CURRENT_TIMESTAMP
       RETURNING id, (xmax = 0) AS inserted`,
-      [uuidv4(), teamUuid, leagueId, player.rosterId, player.firstName, player.lastName, normalizePosition(player.position), player.overallRating || 70, player.age || 22, player.speed || 70, devTraitToString(player.devTrait), isFreeAgent, player.isOnPracticeSquad === true]
+      [
+        uuidv4(), teamUuid, leagueId, player.rosterId, player.firstName, player.lastName, 
+        normalizePosition(player.position), playerOvr, playerAge, playerSpd, 
+        devTraitToString(player.devTrait), isFreeAgent, player.isOnPracticeSquad === true
+      ]
     );
 
     const playerId = upsertResult.rows[0].id;
@@ -108,7 +119,6 @@ export const ingestPlayers = async (leagueId: string, season: number, rostersDat
     if (upsertResult.rows[0].inserted) created++; else updated++;
     await saveTraits(playerId, season, player);
   }
-  // This return object now perfectly matches the 'type' the error was complaining about
   return { created, updated, playerIdMap, statsProcessed: updated }; 
 };
 
@@ -143,10 +153,19 @@ export const ingestGames = async (leagueId: string, scoresData: any[], teamIdMap
 // SAVE PLAYER TRAITS
 // =============================================
 const saveTraits = async (playerId: string, season: number, player: any) => {
+  // EA Payload Mapping Definitions
+  const playerSpd = player.speed || player.speedRating || 70;
+  const playerAwr = player.awareness || player.awarenessRating || 70;
+  const playerStr = player.strength || player.strengthRating || 70;
+
   await query(
     `INSERT INTO player_traits (id, player_id, season, speed, awareness, strength)
      VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (player_id, season) DO UPDATE SET updated_at = CURRENT_TIMESTAMP`,
-    [uuidv4(), playerId, season, player.speed || 70, player.awareness || 70, player.strength || 70]
+     ON CONFLICT (player_id, season) DO UPDATE SET 
+        speed = EXCLUDED.speed,
+        awareness = EXCLUDED.awareness,
+        strength = EXCLUDED.strength,
+        updated_at = CURRENT_TIMESTAMP`,
+    [uuidv4(), playerId, season, playerSpd, playerAwr, playerStr]
   );
 };
