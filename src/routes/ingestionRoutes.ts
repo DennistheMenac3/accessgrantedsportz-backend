@@ -21,16 +21,25 @@ router.post(
   '/madden/:leagueId/:apiKey/*',
   async (req: any, res: any) => {
     try {
-      const { leagueId, apiKey } = req.params;
-      const data = req.body;
+      // 1. Extract and sanitize URL parameters to remove hidden EA whitespace
+      const leagueId = req.params.leagueId?.trim();
+      const apiKey = req.params.apiKey?.trim();
+      const data = req.body || {}; // Fallback to empty object if body is missing
 
-      // 1. Validate the API Key extracted from the path
+      console.log(`\n[EA INGEST] 🚨 New Request Received!`);
+      console.log(`[EA INGEST] Path: ${req.path}`);
+      console.log(`[EA INGEST] League ID: '${leagueId}'`);
+      console.log(`[EA INGEST] API Key: '${apiKey}'`);
+      console.log(`[EA INGEST] Payload Size: ${JSON.stringify(data).length} bytes`);
+
+      // 2. Validate the API Key
       const authResult = await query(
         `SELECT * FROM leagues WHERE id = $1 AND api_key = $2`,
         [leagueId, apiKey]
       );
 
       if (authResult.rows.length === 0) {
+        console.log(`[EA INGEST] ❌ Auth Failed! No match in database.`);
         res.status(401).json({
           success: false,
           message: 'Invalid league ID or API key'
@@ -38,32 +47,36 @@ router.post(
         return;
       }
 
+      console.log(`[EA INGEST] ✅ Auth Successful for ${authResult.rows[0].name}`);
+
       const league = authResult.rows[0];
       const season = league.season || 1;
       const channelId = league.discord_channel_id;
 
-      // 2. Identify the incoming payload
-      const teams = data.leagueTeamInfoList?.leagueTeamInfo || data.teamInfoList?.teamInfo || data.teams || [];
-      const players = data.rosterInfoList?.playerInfo || data.playerInfoList?.playerInfo || data.rosters || [];
-      const scores = data.scheduleInfoList?.scheduleInfo || data.gameInfoList?.gameInfo || data.scores || [];
+      // 3. Identify the incoming payload safely (using optional chaining ?.)
+      const teams = data?.leagueTeamInfoList?.leagueTeamInfo || data?.teamInfoList?.teamInfo || data?.teams || [];
+      const players = data?.rosterInfoList?.playerInfo || data?.playerInfoList?.playerInfo || data?.rosters || [];
+      const scores = data?.scheduleInfoList?.scheduleInfo || data?.gameInfoList?.gameInfo || data?.scores || [];
 
       if (teams.length === 0 && players.length === 0 && scores.length === 0) {
+        console.log(`[EA INGEST] ⚠️ Unrecognized or empty payload.`);
         res.status(400).json({ success: false, message: 'Unrecognized export payload.' });
         return;
       }
 
-      console.log(`📥 Madden export received for ${league.name}`);
       const processedItems: string[] = [];
 
-      // 3. Process Teams
+      // 4. Process Teams
       if (teams.length > 0) {
+        console.log(`[EA INGEST] ⚙️ Processing ${teams.length} teams...`);
         const { created, updated } = await ingestTeams(leagueId, teams);
-        console.log(`✅ Teams: ${created} created, ${updated} updated`);
+        console.log(`[EA INGEST] ✅ Teams: ${created} created, ${updated} updated`);
         processedItems.push('Teams');
       }
 
-      // 4. Process Rosters
+      // 5. Process Rosters
       if (players.length > 0) {
+        console.log(`[EA INGEST] ⚙️ Processing ${players.length} players...`);
         const teamsResult = await query(`SELECT id, madden_id FROM teams WHERE league_id = $1`, [leagueId]);
         const teamIdMap = new Map<number, string>();
         teamsResult.rows.forEach((t: any) => {
@@ -71,12 +84,13 @@ router.post(
         });
 
         const { created, updated } = await ingestPlayers(leagueId, season, players, teamIdMap);
-        console.log(`✅ Rosters: ${created} created, ${updated} updated`);
+        console.log(`[EA INGEST] ✅ Rosters: ${created} created, ${updated} updated`);
         processedItems.push('Rosters');
       }
 
-      // 5. Process Weekly Stats & Auto-Posts
+      // 6. Process Weekly Stats
       if (scores.length > 0) {
+        console.log(`[EA INGEST] ⚙️ Processing ${scores.length} games...`);
         const teamsResult = await query(`SELECT id, madden_id FROM teams WHERE league_id = $1`, [leagueId]);
         const teamIdMap = new Map<number, string>();
         teamsResult.rows.forEach((t: any) => {
@@ -90,7 +104,7 @@ router.post(
         });
 
         const { created, statsProcessed } = await ingestGames(leagueId, scores, teamIdMap, playerIdMap);
-        console.log(`✅ Stats: ${created} games created, ${statsProcessed} stats logged`);
+        console.log(`[EA INGEST] ✅ Stats: ${created} games created, ${statsProcessed} stats logged`);
         processedItems.push('Weekly Stats');
 
         // Trigger Discord integrations asynchronously
@@ -107,19 +121,18 @@ router.post(
             }
             await autoPostAwardUpdate(leagueId, channelId, season);
           } catch (discordError) {
-            console.error('Discord auto-post error:', discordError);
+            console.error('[EA INGEST] Discord auto-post error:', discordError);
           }
         }
       }
 
-      // Send success response
       res.status(200).json({
         success: true,
         message: `Successfully processed: ${processedItems.join(', ')}`
       });
 
     } catch (error) {
-      console.error('EA Ingest Error:', error);
+      console.error('[EA INGEST] 💥 Server Error processing export:', error);
       res.status(500).json({ success: false, message: 'Server error processing export' });
     }
   }
