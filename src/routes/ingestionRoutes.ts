@@ -1,12 +1,9 @@
 import { Router } from 'express';
 import { query } from '../config/database';
 import { ingestTeams, ingestPlayers, ingestGames } from '../services/maddenIngestionService';
-import { autoPostGameRecap, autoPostAwardUpdate } from '../services/schedulerService';
-import { calculateAllAwards } from '../services/awardsService';
 
 const router = Router();
 
-// Helper to find arrays in EA's messy JSON
 const extractData = (body: any, possibleKeys: string[]) => {
   if (!body) return [];
   for (const key of possibleKeys) {
@@ -39,15 +36,7 @@ router.post('/madden/:leagueId/:apiKey/*', async (req: any, res: any) => {
     const players = extractData(data, ['rosterInfoList', 'playerInfoList', 'rosters', 'playerInfo']);
     const scores = extractData(data, ['scheduleInfoList', 'gameInfoList', 'scores']);
 
-    console.log(`[EA INGEST] 🔎 Found: ${teams.length} teams, ${players.length} players, ${scores.length} games`);
-
-    if (teams.length === 0 && players.length === 0 && scores.length === 0) {
-      return res.status(200).json({ success: true, message: 'Heartbeat received.' });
-    }
-
-    if (teams.length > 0) {
-      await ingestTeams(leagueId, teams);
-    }
+    if (teams.length > 0) await ingestTeams(leagueId, teams);
     
     if (players.length > 0) {
       const teamsRes = await query(`SELECT id, madden_id FROM teams WHERE league_id = $1`, [leagueId]);
@@ -70,7 +59,7 @@ router.post('/madden/:leagueId/:apiKey/*', async (req: any, res: any) => {
 
     res.status(200).json({ success: true });
   } catch (error) {
-    console.error('[EA INGEST] 💥 Crash:', error);
+    console.error('[EA INGEST] Error:', error);
     res.status(500).json({ success: false });
   }
 });
