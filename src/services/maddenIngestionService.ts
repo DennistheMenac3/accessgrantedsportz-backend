@@ -118,8 +118,8 @@ export const ingestTeams = async (
           intToHex(team.secondaryColor),
           divisionInfo?.conference || null,
           divisionInfo?.division   || null,
-          team.teamId, // This sets madden_id = $9
-          teamId       // This sets id = $10
+          team.teamId, 
+          teamId       
         ]
       );
       updated++;
@@ -157,7 +157,7 @@ export const ingestTeams = async (
           intToHex(team.secondaryColor),
           divisionInfo?.conference || null,
           divisionInfo?.division   || null,
-          team.teamId // This passes the EA teamId as $13 (madden_id)
+          team.teamId 
         ]
       );
       created++;
@@ -190,8 +190,19 @@ export const ingestPlayers = async (
   const playerIdMap = new Map<number, string>();
 
   for (const player of rostersData) {
-    const teamId = teamIdMap.get(player.teamId);
-    if (!teamId) continue;
+    let teamId = null;
+    let isFreeAgent = false;
+    const isPracticeSquad = player.isOnPracticeSquad === true; 
+
+    // Handle Free Agents (EA usually assigns teamId 0 or null)
+    if (player.teamId === 0 || player.teamId === null || player.teamId === undefined) {
+      isFreeAgent = true;
+    } else {
+      teamId = teamIdMap.get(player.teamId) || null;
+    }
+
+    // If they belong to an active team, but we don't have that team mapped, skip to avoid DB crashes
+    if (!isFreeAgent && !teamId) continue;
 
     const position    = normalizePosition(player.position);
     const devTrait    = devTraitToString(player.devTrait);
@@ -210,7 +221,7 @@ export const ingestPlayers = async (
     // Postgres will ignore this UUID and return the existing one.
     const newUuid = uuidv4();
 
-    // TRUE Upsert Query utilizing madden_id and Financials
+    // TRUE Upsert Query utilizing madden_id, Financials, and Status Flags
     const upsertResult = await query(
       `INSERT INTO players (
         id, team_id, league_id, madden_id,
@@ -218,11 +229,12 @@ export const ingestPlayers = async (
         overall_rating, age, speed,
         strength, awareness, dev_trait,
         years_pro, headshot_url,
-        contract_years, contract_salary, contract_bonus, contract_year_current, is_on_rookie_deal
+        contract_years, contract_salary, contract_bonus, contract_year_current, 
+        is_on_rookie_deal, is_free_agent, is_practice_squad
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 
-        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
       )
       ON CONFLICT (league_id, madden_id) DO UPDATE SET
         team_id               = EXCLUDED.team_id,
@@ -240,13 +252,15 @@ export const ingestPlayers = async (
         contract_bonus        = EXCLUDED.contract_bonus,
         contract_year_current = EXCLUDED.contract_year_current,
         is_on_rookie_deal     = EXCLUDED.is_on_rookie_deal,
+        is_free_agent         = EXCLUDED.is_free_agent,
+        is_practice_squad     = EXCLUDED.is_practice_squad,
         updated_at            = CURRENT_TIMESTAMP
       RETURNING id, (xmax = 0) AS inserted`,
       [
         newUuid,
         teamId,
         leagueId,
-        player.rosterId, // The crucial EA ID
+        player.rosterId, 
         player.firstName,
         player.lastName,
         position,
@@ -262,7 +276,9 @@ export const ingestPlayers = async (
         player.contractSalary || 0,             
         player.contractBonus  || 0,             
         currentContractYear,                    
-        isRookieDeal                            
+        isRookieDeal,                           
+        isFreeAgent,                            
+        isPracticeSquad                         
       ]
     );
 
