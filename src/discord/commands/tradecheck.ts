@@ -55,7 +55,7 @@ const findPlayer = async (
 
 export const data = new SlashCommandBuilder()
   .setName('tradecheck')
-  .setDescription('⚖️ AI-powered trade analysis with full roster context')
+  .setDescription('⚖️ AGSportz trade analysis with full roster context')
   .addStringOption(option =>
     option
       .setName('offering')
@@ -116,7 +116,7 @@ export const execute = async (
 
     // Show loading message
     await interaction.editReply(
-      `⏳ **AI analyzing trade...**\n` +
+      `⏳ **Analyzing trade...**\n` +
       `${offered.first_name} ${offered.last_name} ↔️ ` +
       `${requested.first_name} ${requested.last_name}\n` +
       `Checking rosters, needs, draft capital... (~15 seconds)`
@@ -132,14 +132,14 @@ export const execute = async (
       league.current_season
     );
 
-    console.log('✅ AI advice received:', advice.verdict);
+    console.log('✅ Advice received:', advice.verdict);
 
     const offeredValue   = parseFloat(offered.trade_value  || '0');
     const requestedValue = parseFloat(requested.trade_value || '0');
     const absDiff        = Math.abs(offeredValue - requestedValue);
 
     const tradeEmbed = createTradeEmbed(absDiff)
-      .setTitle('⚖️ Trade Analysis | AccessGrantedSportz')
+      .setTitle('Trade Analysis | AccessGrantedSportz')
       .setDescription(
         `**${advice.verdict}** | Gap: **${absDiff.toFixed(1)} TVS** | ` +
         `Winner: **${advice.winner}**`
@@ -168,7 +168,7 @@ export const execute = async (
           inline: true
         },
         {
-          name:  '🤖 AI Trade Advisor',
+          name:  'Trade Advisor',
           value: advice.advice.slice(0, 1024)
         }
       );

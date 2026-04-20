@@ -26,7 +26,7 @@ const getLeagueForServer = async (guildId: string): Promise<any | null> => {
 
 export const data = new SlashCommandBuilder()
   .setName('recap')
-  .setDescription('📰 Get AI-generated game recaps');
+  .setDescription('📰 Get detailed game recaps');
 
 export const execute = async (
   interaction: ChatInputCommandInteraction
@@ -219,7 +219,7 @@ export const execute = async (
       await interaction.editReply({
         embeds: [createEmbed(COLORS.NAVY)
           .setTitle(`📰 Week ${weekNum} Games | ${league.name}`)
-          .setDescription('Select a game for the AI recap:')],
+          .setDescription('Select a game to recap:')],
         components: [gameRow]
       });
 
@@ -271,7 +271,7 @@ export const execute = async (
 
         await interaction.editReply({
           embeds: [createEmbed(COLORS.NAVY)
-            .setTitle('⏳ Generating AI Recap...')
+            .setTitle('⏳ Generating Recap...')
             .setDescription(
               `${selectedGame?.away_team} vs ${selectedGame?.home_team}\n` +
               `This takes about 10 seconds...`

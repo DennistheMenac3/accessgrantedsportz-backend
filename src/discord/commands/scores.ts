@@ -139,7 +139,7 @@ export const execute = async (
       .setDescription(`Season ${league.current_season}`)
       .addFields(fields)
       .setFooter({
-        text: 'Use /recap for AI game recaps • AccessGrantedSportz'
+        text: 'Use /recap for detailed game recaps • AccessGrantedSportz'
       });
 
     await interaction.editReply({ embeds: [embed] });

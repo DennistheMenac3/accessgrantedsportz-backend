@@ -22,6 +22,7 @@ import inviteRoutes       from './routes/inviteRoutes';
 import leagueInviteRoutes from './routes/leagueInviteRoutes';
 import discordAuthRoutes  from './routes/discordAuthRoutes';
 import stripeRoutes       from './routes/stripeRoutes';
+import communityRoutes from './routes/communityRoutes';
 
 // Import Discord bot
 import { startBot, commands } from './discord/bot';
@@ -107,6 +108,7 @@ app.use('/api/leagues/:leagueId/storylines', storylineRoutes);
 app.use('/api/invites',                      inviteRoutes);
 app.use('/api/leagues/:leagueId/invites',    leagueInviteRoutes);
 app.use('/api/leagues/:leagueId/members',    leagueInviteRoutes);
+app.use('/api/community', communityRoutes);
 
 // =============================================
 // DISCORD COMMANDS
