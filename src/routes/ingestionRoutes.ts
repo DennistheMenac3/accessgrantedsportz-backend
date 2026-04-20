@@ -4,63 +4,74 @@ import { ingestTeams, ingestPlayers, ingestGames } from '../services/maddenInges
 
 const router = Router();
 
-/**
- * THE NEON-STYLE CATCH-ALL
- * This matches any path that starts with your league and key.
- * Anything EA appends after the key (like /ps5/20036315/roster) 
- * will be captured by the '*' and safely ignored.
- */
+// Helper to find data regardless of how deeply EA nests it
+const extractData = (body: any, possibleKeys: string[]) => {
+  if (!body) return [];
+  for (const key of possibleKeys) {
+    if (Array.isArray(body[key])) return body[key];
+    // Check one level deeper (Madden often does leagueTeamInfoList.leagueTeamInfo)
+    if (body[key] && Array.isArray(body[key][Object.keys(body[key])[0]])) {
+        return body[key][Object.keys(body[key])[0]];
+    }
+  }
+  return [];
+};
+
 router.post('/madden/:leagueId/:apiKey/*', async (req: any, res: any) => {
   try {
-    // 1. Sanitize the URL to remove the %20 spaces Madden often adds
     const leagueId = req.params.leagueId?.trim().replace(/%20/g, '');
     const apiKey = req.params.apiKey?.trim().replace(/%20/g, '');
     const data = req.body || {};
 
-    // 2. Database Auth Check
     const authResult = await query(
       `SELECT * FROM leagues WHERE id = $1 AND api_key = $2`,
       [leagueId, apiKey]
     );
 
-    if (authResult.rows.length === 0) {
-      console.log(`[EA INGEST] ❌ Unauthorized: League ${leagueId} / Key ${apiKey}`);
-      return res.status(401).json({ success: false, message: 'Unauthorized' });
-    }
+    if (authResult.rows.length === 0) return res.status(401).json({ success: false });
 
     const league = authResult.rows[0];
     const season = league.season || 1;
 
-    // 3. Identify Payload (Mimicking industry-standard data detection)
-    const teams = data?.leagueTeamInfoList?.leagueTeamInfo || data?.teamInfoList?.teamInfo || data?.teams || [];
-    const players = data?.rosterInfoList?.playerInfo || data?.playerInfoList?.playerInfo || data?.rosters || [];
-    const scores = data?.scheduleInfoList?.scheduleInfo || data?.gameInfoList?.gameInfo || data?.scores || [];
+    // 1. Broad detection of Madden data keys
+    const teams = extractData(data, ['leagueTeamInfoList', 'teamInfoList', 'teams', 'teamInfo']);
+    const players = extractData(data, ['rosterInfoList', 'playerInfoList', 'rosters', 'playerInfo']);
+    const scores = extractData(data, ['scheduleInfoList', 'gameInfoList', 'scores']);
 
-    // 4. Silence 400 Errors
-    // Many Madden files (kicking, punting) aren't used. We return 200 OK 
-    // so the app sees a green checkmark, even if we don't save the data.
+    // 2. Log exactly what we found so we can debug the Railway logs
+    console.log(`[EA INGEST] 🔎 Detection: ${teams.length} teams, ${players.length} players, ${scores.length} games`);
+
     if (teams.length === 0 && players.length === 0 && scores.length === 0) {
-      console.log(`[EA INGEST] ℹ️ Ignored irrelevant file: ${req.path}`);
-      return res.status(200).json({ success: true, message: 'Acknowledged' });
+      return res.status(200).json({ success: true, message: 'Received, but no actionable data found.' });
     }
 
-    // 5. Execution
+    // 3. IMPORTANT: Process Teams FIRST
     if (teams.length > 0) {
+      console.log(`[EA INGEST] 🚀 Saving ${teams.length} teams to DB...`);
       await ingestTeams(leagueId, teams);
     }
     
+    // 4. Process Players (only if we have teams in the DB)
     if (players.length > 0) {
       const teamsRes = await query(`SELECT id, madden_id FROM teams WHERE league_id = $1`, [leagueId]);
+      
+      if (teamsRes.rows.length === 0) {
+        console.log(`[EA INGEST] 🛑 ABORT: Cannot save players because the TEAMS table is empty. Export League Info first!`);
+        return res.status(200).json({ success: true, message: 'Teams missing. Export teams first.' });
+      }
+
       const teamIdMap = new Map();
       teamsRes.rows.forEach((t: any) => teamIdMap.set(t.madden_id, t.id));
+      
+      console.log(`[EA INGEST] 🚀 Saving ${players.length} players to DB...`);
       await ingestPlayers(leagueId, season, players, teamIdMap);
     }
 
+    // 5. Process Games
     if (scores.length > 0) {
-      // (Your existing ingestGames logic goes here)
+      // (Your existing ingestGames logic)
     }
 
-    console.log(`[EA INGEST] ✅ Success: ${req.path}`);
     res.status(200).json({ success: true });
 
   } catch (error) {
