@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { query } from '../config/database';
 import { ingestTeams, ingestPlayers, ingestGames } from '../services/maddenIngestionService';
+import { calculateLeagueTradeValues } from '../services/tradeValueService'; // <-- Add Import
 
 const router = Router();
 
@@ -42,7 +43,13 @@ router.post('/madden/:leagueId/:apiKey/*', async (req: any, res: any) => {
       const teamsRes = await query(`SELECT id, madden_id FROM teams WHERE league_id = $1`, [leagueId]);
       const teamIdMap = new Map();
       teamsRes.rows.forEach((t: any) => teamIdMap.set(t.madden_id, t.id));
+      
+      // 1. Ingest the raw EA Roster Data
       await ingestPlayers(leagueId, season, players, teamIdMap);
+      
+      // 2. Trigger the TVS Ecosystem to calculate all values based on fresh data
+      console.log(`[TVS ENGINE] Calculating Trade Values for League: ${leagueId}`);
+      await calculateLeagueTradeValues(leagueId, season);
     }
 
     if (scores.length > 0) {
