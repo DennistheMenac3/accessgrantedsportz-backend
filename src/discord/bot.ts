@@ -58,7 +58,10 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         const [, teamId, pageStr] = interaction.customId.split('_');
         const targetPage = parseInt(pageStr, 10);
 
-        const teamRes = await query(`SELECT id, name, city, abbreviation FROM teams WHERE id = $1`, [teamId]);
+        const teamRes = await query(
+          `SELECT id, name, city, abbreviation, overall_rating, team_logo_url FROM teams WHERE id = $1`, 
+          [teamId]
+        );
         const rosterRes = await query(
           `SELECT p.first_name, p.last_name, p.position, p.overall_rating, p.age, p.speed, tvh.total_value 
            FROM players p LEFT JOIN trade_value_history tvh ON p.id = tvh.player_id
