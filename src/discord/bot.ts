@@ -140,17 +140,21 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     await command.execute(interaction);
   } catch (error: any) {
     console.error(`Error executing ${interaction.commandName}:`, error);
-    if (error.code === 10062 || error.code === 40060) return;
+    
+    // Grab the exact error message so we can read it in Discord
+    const errorString = error.message || 'Unknown Error';
+    const msg = `❌ **Application Crash:**\n\`\`\`\n${errorString}\n\`\`\`\n*The bot crashed before it could finish processing.*`;
+
     try {
-      const msg = '❌ There was an error executing this command.';
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: msg, ephemeral: true });
+      if (interaction.deferred) {
+        // If it was thinking, replace the stuck thinking message with the exact error!
+        await interaction.editReply({ content: msg, embeds: [], components: [] });
       } else {
         await interaction.reply({ content: msg, ephemeral: true });
       }
     } catch { }
   }
-});
+}); // <--- THIS WAS THE MISSING BRACE!
 
 export const postToChannel = async (channelId: string, content: string): Promise<void> => {
   try {
