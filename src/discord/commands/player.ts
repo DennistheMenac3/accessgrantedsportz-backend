@@ -292,9 +292,9 @@ const sendPlayerCard = async (
 ): Promise<void> => {
   const tradeValue = parseFloat(player.trade_value || '0');
   const breakdown  = player.value_breakdown || {};
-
-  const devIcon  = getDevTraitIcon(player.dev_trait);
-  const devLabel = getDevTraitLabel(player.dev_trait);
+  const devLabel   = getDevTraitLabel(player.dev_trait);
+  const devIcon    = getDevTraitIcon(player.dev_trait);
+  const profileUrl = `https://accessgrantedsportz.com/player/${player.id}`;
 
   const valueColor =
     tradeValue >= 200 ? COLORS.GOLD   :
@@ -302,71 +302,103 @@ const sendPlayerCard = async (
     COLORS.NAVY;
 
   const valueTier =
-    tradeValue >= 200 ? '👑 ELITE'     :
-    tradeValue >= 150 ? '💎 FRANCHISE' :
-    tradeValue >= 100 ? '⭐ PREMIUM'   :
-    tradeValue >= 50  ? '✅ SOLID'     :
-    '📋 DEPTH';
+    tradeValue >= 200 ? 'ELITE'          :
+    tradeValue >= 150 ? 'FRANCHISE'      :
+    tradeValue >= 100 ? 'PREMIUM'        :
+    tradeValue >= 50  ? 'SOLID STARTER'  :
+    'BENCHWARMER';
+
+  const record = player.team_abbr
+    ? `${player.wins || 0}-${player.losses || 0}`
+    : '';
 
   const embed = createEmbed(valueColor)
-    .setTitle(`${player.first_name} ${player.last_name} | ${player.position}`)
+    .setAuthor({
+      name:    devLabel,
+      iconURL: devIcon
+    })
+    .setTitle(
+      `${player.first_name} ${player.last_name}  ·  ` +
+      `${player.position}  ·  ` +
+      `${player.team_abbr || 'Free Agent'}  ·  ` +
+      `${player.overall_rating || '—'} OVR`
+    )
+    .setURL(profileUrl)
     .setDescription(
-      `${player.team_name || 'Free Agent'} ` +
-      `${player.team_abbr
-        ? `(${player.wins || 0}-${player.losses || 0})`
-        : ''} | ` +
-      `${devLabel} | ${valueTier}`
+      `${player.team_name || 'Free Agent'}` +
+      `${record ? `  (${record})` : ''}`
     )
     .addFields(
       {
-        name:   '📊 Ratings',
+        name:   'Ratings',
         value:
-          `**OVR:** ${player.overall_rating || '?'}\n` +
-          `**Speed:** ${player.speed || '?'}\n` +
-          `**Age:** ${player.age || '?'}\n` +
-          `**Exp:** ${player.years_pro ?? '?'} yrs`,
+          `Overall    ${player.overall_rating || '—'}\n` +
+          `Speed       ${player.speed         || '—'}\n` +
+          `Age          ${player.age          || '—'}\n` +
+          `Experience  ${player.years_pro ?? '—'} yrs`,
         inline: true
       },
       {
-        name:   '💰 Trade Value',
-        value:  `**TVS: ${tradeValue.toFixed(1)}**\n${valueTier}`,
+        name:   'Trade Value',
+        value:
+          `TVS   ${tradeValue.toFixed(1)}\n` +
+          `Tier   ${valueTier}`,
         inline: true
       }
     );
 
-  // Player portrait — large image
+  // Portrait — right side thumbnail
   if (player.portrait_url) {
-    embed.setImage(player.portrait_url);
+    embed.setThumbnail(player.portrait_url);
   }
 
-  // Dev trait icon — thumbnail
-  if (devIcon) {
-    embed.setThumbnail(devIcon);
+  // Abilities
+  if (player.abilities && player.abilities.length > 0) {
+    embed.addFields({
+      name:   'Abilities',
+      value:  player.abilities
+        .map((a: any) => a.ability_name || a)
+        .join(', '),
+      inline: false
+    });
   }
 
+  // Key attributes
   if (breakdown && Object.keys(breakdown).length > 0) {
     embed.addFields({
-      name:   '📈 Value Breakdown',
+      name:   'Value Breakdown',
       value:
-        `Base: **${breakdown.base_value         || 0}** | ` +
-        `Speed: **${breakdown.speed_bonus       || 0}** | ` +
-        `Dev: **${breakdown.dev_trait_age_bonus || 0}**\n` +
-        `Age ×${breakdown.age_multiplier        || 1} | ` +
-        `Pos ×${breakdown.position_multiplier   || 1} | ` +
+        `Base ${breakdown.base_value         || 0}  ·  ` +
+        `Speed ${breakdown.speed_bonus       || 0}  ·  ` +
+        `Dev ${breakdown.dev_trait_age_bonus || 0}\n` +
+        `Age ×${breakdown.age_multiplier        || 1}  ·  ` +
+        `Position ×${breakdown.position_multiplier || 1}  ·  ` +
         `Dev ×${breakdown.dev_trait_multiplier  || 1}`,
       inline: false
     });
   }
 
+  // Contract
   if (player.contract_salary) {
     embed.addFields({
-      name:   '📋 Contract',
+      name:   'Contract',
       value:
-        `Salary: $${(player.contract_salary / 1000000).toFixed(2)}M\n` +
-        `Years:  ${player.contract_years || '?'}`,
+        `Salary  $${(player.contract_salary / 1000000).toFixed(2)}M\n` +
+        `Years    ${player.contract_years || '—'}`,
       inline: true
     });
   }
+
+  // Footer — clean, no emojis
+  embed
+    .setFooter({
+      text:
+        'TVS — Trade Value Score  ·  ' +
+        'ELITE 200+  ·  FRANCHISE 150+  ·  PREMIUM 100+  ·  ' +
+        'SOLID 50+  ·  BENCHWARMER <50  ·  ' +
+        'AccessGrantedSportz'
+    })
+    .setTimestamp();
 
   await interaction.editReply({ embeds: [embed] });
 };

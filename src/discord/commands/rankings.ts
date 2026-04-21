@@ -28,8 +28,8 @@ export const data = new SlashCommandBuilder()
       .setDescription('Choose ranking style')
       .setRequired(false)
       .addChoices(
-        { name: '🔥 The Hot Seat (Hype)',        value: 'stephen_a' },
-        { name: '📊 The Power Report (Standard)', value: 'standard'  }
+        { name: 'The Hot Seat',    value: 'stephen_a' },
+        { name: 'The Power Report', value: 'standard'  }
       )
   );
 
@@ -44,28 +44,24 @@ export const execute = async (
     if (!league) {
       await interaction.editReply({
         embeds: [createEmbed(COLORS.DANGER)
-          .setTitle('❌ No League Connected')
+          .setTitle('No League Connected')
           .setDescription(
-            'No league connected to this server.\n' +
-            'Ask your commissioner to set up AccessGrantedSportz!'
+            'No league is connected to this server.\n' +
+            'Ask your commissioner to set up AccessGrantedSportz.'
           )]
       });
       return;
     }
 
-    const style = (
-      interaction.options.getString('style') || 'stephen_a'
-    ) as 'standard' | 'stephen_a';
+    const style     = (interaction.options.getString('style') || 'stephen_a') as 'standard' | 'stephen_a';
+    const isHotSeat = style === 'stephen_a';
+    const title     = isHotSeat ? 'The Hot Seat' : 'The Power Report';
+    const color     = isHotSeat ? COLORS.ORANGE  : COLORS.NAVY;
 
-    const isHotSeat  = style === 'stephen_a';
-    const title      = isHotSeat ? '🔥 The Hot Seat' : '📊 The Power Report';
-    const color      = isHotSeat ? COLORS.ORANGE : COLORS.NAVY;
-
-    // Loading embed
     await interaction.editReply({
       embeds: [createEmbed(color)
-        .setTitle(`${title} | Generating...`)
-        .setDescription('Analyzing all teams... (~15 seconds)')]
+        .setTitle(`${title}  ·  Generating`)
+        .setDescription('Analyzing league data...')]
     });
 
     const result = await generatePowerRankings(
@@ -75,7 +71,6 @@ export const execute = async (
       style
     );
 
-    // Split rankings into chunks of 1024 chars for embed fields
     const rankingsText = result.rankings;
     const chunks: string[] = [];
     let current = '';
@@ -90,27 +85,26 @@ export const execute = async (
     });
     if (current) chunks.push(current);
 
-    // First embed — header
     const mainEmbed = createEmbed(color)
-      .setTitle(`${title} | ${league.name}`)
-      .setDescription(
-        `Week ${league.current_week} | Season ${league.current_season}`
-      )
+      .setTitle(`${title}  ·  ${league.name}`)
+      .setDescription(`Season ${league.current_season}  ·  Week ${league.current_week}`)
       .addFields(
         chunks.slice(0, 4).map((chunk, i) => ({
-          name:   i === 0 ? '📋 Rankings' : '​', // zero-width space for continuation
+          name:   i === 0 ? 'Rankings' : '\u200b',
           value:  chunk.slice(0, 1024),
           inline: false
         }))
-      );
+      )
+      .setFooter({ text: 'AccessGrantedSportz  ·  Access Granted. Game On.' })
+      .setTimestamp();
 
     await interaction.editReply({ embeds: [mainEmbed] });
 
-    // If rankings overflow post additional embeds
     for (let i = 4; i < chunks.length; i++) {
       await interaction.followUp({
         embeds: [createEmbed(color)
-          .setDescription(chunks[i].slice(0, 4096))]
+          .setDescription(chunks[i].slice(0, 4096))
+          .setFooter({ text: 'AccessGrantedSportz' })]
       });
     }
 
@@ -118,7 +112,7 @@ export const execute = async (
     console.error('Rankings command error:', error);
     await interaction.editReply({
       embeds: [createEmbed(COLORS.DANGER)
-        .setTitle('❌ Error')
+        .setTitle('Error')
         .setDescription('Error generating rankings. Please try again.')]
     });
   }

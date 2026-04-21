@@ -1,12 +1,11 @@
 import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
-  EmbedBuilder
+  AutocompleteInteraction
 } from 'discord.js';
 import { query } from '../../config/database';
 import { generateTradeAdvice } from '../../services/aiStorylineService';
-import { postToChannel } from '../bot';
-import { COLORS, FOOTER, createTradeEmbed } from '../../config/brand';
+import { COLORS, createEmbed, createTradeEmbed, getDevTraitLabel } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -22,15 +21,16 @@ const getLeagueForServer = async (guildId: string): Promise<any | null> => {
 };
 
 const findPlayer = async (
-  name:     string,
+  input:    string,
   leagueId: string
 ): Promise<any | null> => {
+  const isUUID = input.length === 36 && input.includes('-');
   const result = await query(
     `SELECT
       p.id, p.first_name, p.last_name,
       p.position, p.overall_rating,
       p.dev_trait, p.age, p.speed,
-      p.team_id,
+      p.team_id, p.portrait_url,
       t.name         as team_name,
       t.abbreviation as team_abbr,
       t.wins, t.losses,
@@ -41,90 +41,130 @@ const findPlayer = async (
        ON tvh.player_id  = p.id
        AND tvh.league_id = p.league_id
      WHERE p.league_id = $1
-     AND (
-       LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER('%' || $2 || '%')
-       OR LOWER(p.first_name) LIKE LOWER('%' || $2 || '%')
-       OR LOWER(p.last_name)  LIKE LOWER('%' || $2 || '%')
-     )
-     ORDER BY tvh.calculated_at DESC
+     AND ${isUUID
+       ? 'p.id = $2'
+       : `LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER('%' || $2 || '%')`
+     }
+     ORDER BY tvh.calculated_at DESC, p.overall_rating DESC
      LIMIT 1`,
-    [leagueId, name]
+    [leagueId, input]
   );
   return result.rows[0] || null;
 };
 
+const autocompleteSearch = async (
+  focused:  string,
+  leagueId: string
+) => {
+  const result = await query(
+    `SELECT p.id, p.first_name, p.last_name, p.position, t.abbreviation
+     FROM players p
+     LEFT JOIN teams t ON t.id = p.team_id
+     WHERE p.league_id = $1
+     AND LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER($2)
+     ORDER BY p.overall_rating DESC
+     LIMIT 25`,
+    [leagueId, `%${focused}%`]
+  );
+  return result.rows.map((p: any) => ({
+    name:  `${p.first_name} ${p.last_name} — ${p.position} | ${p.abbreviation || 'FA'}`,
+    value: p.id
+  }));
+};
+
 export const data = new SlashCommandBuilder()
   .setName('tradecheck')
-  .setDescription('⚖️ AGSportz trade analysis with full roster context')
+  .setDescription('Trade analysis with full roster context')
   .addStringOption(option =>
     option
       .setName('offering')
-      .setDescription('Player you are offering')
+      .setDescription('Player you are offering (supports autocomplete)')
       .setRequired(true)
+      .setAutocomplete(true)
   )
   .addStringOption(option =>
     option
       .setName('requesting')
-      .setDescription('Player you want in return')
+      .setDescription('Player you want in return (supports autocomplete)')
       .setRequired(true)
+      .setAutocomplete(true)
   );
+
+export const autocomplete = async (
+  interaction: AutocompleteInteraction
+): Promise<void> => {
+  const league = await getLeagueForServer(interaction.guildId!);
+  if (!league) { await interaction.respond([]); return; }
+
+  const focused = interaction.options.getFocused().toLowerCase();
+  if (!focused || focused.length < 2) { await interaction.respond([]); return; }
+
+  try {
+    const options = await autocompleteSearch(focused, league.id);
+    await interaction.respond(options);
+  } catch { await interaction.respond([]); }
+};
 
 export const execute = async (
   interaction: ChatInputCommandInteraction
 ) => {
   try {
     await interaction.deferReply();
-  } catch {
-    return;
-  }
+  } catch { return; }
 
   try {
-    console.log('🔍 Tradecheck called by:', interaction.user.username);
-
     const league = await getLeagueForServer(interaction.guildId!);
     if (!league) {
-      await interaction.editReply('❌ No league connected.');
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('No League Connected')
+          .setDescription('No league is connected to this server.')]
+      });
       return;
     }
 
-    const offeringName   = interaction.options.getString('offering',   true);
-    const requestingName = interaction.options.getString('requesting', true);
-
-    console.log('🔍 Offering:', offeringName);
-    console.log('🔍 Requesting:', requestingName);
+    const offeringInput   = interaction.options.getString('offering',   true);
+    const requestingInput = interaction.options.getString('requesting', true);
 
     const [offered, requested] = await Promise.all([
-      findPlayer(offeringName,   league.id),
-      findPlayer(requestingName, league.id)
+      findPlayer(offeringInput,   league.id),
+      findPlayer(requestingInput, league.id)
     ]);
 
     if (!offered) {
-      await interaction.editReply(`❌ Player "${offeringName}" not found.`);
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('Player Not Found')
+          .setDescription(
+            `No player matching "${offeringInput}" found.\n` +
+            `Try the autocomplete dropdown for best results.`
+          )]
+      });
       return;
     }
     if (!requested) {
-      await interaction.editReply(`❌ Player "${requestingName}" not found.`);
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('Player Not Found')
+          .setDescription(
+            `No player matching "${requestingInput}" found.\n` +
+            `Try the autocomplete dropdown for best results.`
+          )]
+      });
       return;
     }
 
-    console.log('✅ Players found:', offered.first_name, 'vs', requested.first_name);
+    // Loading state
+    await interaction.editReply({
+      embeds: [createEmbed(COLORS.NAVY)
+        .setTitle('Trade Advisor  ·  Analyzing')
+        .setDescription(
+          `${offered.first_name} ${offered.last_name}  ↔  ` +
+          `${requested.first_name} ${requested.last_name}\n\n` +
+          `Evaluating rosters and trade value...`
+        )]
+    });
 
-    const devLabel = (dev: string) =>
-      dev === 'xfactor'   ? '⚡ XFactor'  :
-      dev === 'superstar' ? '⭐ Superstar' :
-      dev === 'star'      ? '🌟 Star'      : '📋 Normal';
-
-    // Show loading message
-    await interaction.editReply(
-      `⏳ **Analyzing trade...**\n` +
-      `${offered.first_name} ${offered.last_name} ↔️ ` +
-      `${requested.first_name} ${requested.last_name}\n` +
-      `Checking rosters, needs, draft capital... (~15 seconds)`
-    );
-
-    console.log('🔍 Calling generateTradeAdvice...');
-
-    // Get AI trade advice with full roster context
     const advice = await generateTradeAdvice(
       [offered.id],
       [requested.id],
@@ -132,63 +172,77 @@ export const execute = async (
       league.current_season
     );
 
-    console.log('✅ Advice received:', advice.verdict);
-
-    const offeredValue   = parseFloat(offered.trade_value  || '0');
+    const offeredValue   = parseFloat(offered.trade_value   || '0');
     const requestedValue = parseFloat(requested.trade_value || '0');
-    const absDiff        = Math.abs(offeredValue - requestedValue);
+    const diff           = Math.abs(offeredValue - requestedValue);
 
-    const tradeEmbed = createTradeEmbed(absDiff)
-      .setTitle('Trade Analysis | AccessGrantedSportz')
+    const profileUrl1 = `https://accessgrantedsportz.com/player/${offered.id}`;
+    const profileUrl2 = `https://accessgrantedsportz.com/player/${requested.id}`;
+
+    const embed = createTradeEmbed(diff)
+      .setTitle('Trade Analysis  ·  AccessGrantedSportz')
       .setDescription(
-        `**${advice.verdict}** | Gap: **${absDiff.toFixed(1)} TVS** | ` +
-        `Winner: **${advice.winner}**`
+        `${advice.verdict}  ·  ` +
+        `Gap: ${diff.toFixed(1)} TVS  ·  ` +
+        `Advantage: ${advice.winner}`
       )
       .addFields(
         {
-          name:   '📤 You Offer',
+          name:   'You Offer',
           value:
-            `**${offered.first_name} ${offered.last_name}**\n` +
-            `${offered.position} | ${offered.team_name} ` +
-            `(${offered.wins}-${offered.losses})\n` +
-            `OVR: ${offered.overall_rating} | Age: ${offered.age} | ` +
-            `Spd: ${offered.speed} | ${devLabel(offered.dev_trait)}\n` +
-            `💰 TVS: **${offeredValue.toFixed(1)}**`,
+            `[${offered.first_name} ${offered.last_name}](${profileUrl1})\n` +
+            `${offered.position}  ·  ${offered.team_abbr || 'FA'} ` +
+            `(${offered.wins || 0}-${offered.losses || 0})\n` +
+            `OVR: ${offered.overall_rating}  ·  ` +
+            `Age: ${offered.age}  ·  ` +
+            `Spd: ${offered.speed}\n` +
+            `${getDevTraitLabel(offered.dev_trait)}\n` +
+            `TVS: ${offeredValue.toFixed(1)}`,
           inline: true
         },
         {
-          name:   '📥 You Receive',
+          name:   'You Receive',
           value:
-            `**${requested.first_name} ${requested.last_name}**\n` +
-            `${requested.position} | ${requested.team_name} ` +
-            `(${requested.wins}-${requested.losses})\n` +
-            `OVR: ${requested.overall_rating} | Age: ${requested.age} | ` +
-            `Spd: ${requested.speed} | ${devLabel(requested.dev_trait)}\n` +
-            `💰 TVS: **${requestedValue.toFixed(1)}**`,
+            `[${requested.first_name} ${requested.last_name}](${profileUrl2})\n` +
+            `${requested.position}  ·  ${requested.team_abbr || 'FA'} ` +
+            `(${requested.wins || 0}-${requested.losses || 0})\n` +
+            `OVR: ${requested.overall_rating}  ·  ` +
+            `Age: ${requested.age}  ·  ` +
+            `Spd: ${requested.speed}\n` +
+            `${getDevTraitLabel(requested.dev_trait)}\n` +
+            `TVS: ${requestedValue.toFixed(1)}`,
           inline: true
         },
         {
-          name:  'Trade Advisor',
-          value: advice.advice.slice(0, 1024)
+          name:   'Trade Advisor',
+          value:  advice.advice.slice(0, 1024),
+          inline: false
         }
-      );
+      )
+      .setFooter({
+        text: 'TVS — Trade Value Score  ·  AccessGrantedSportz'
+      })
+      .setTimestamp();
 
-    await interaction.editReply({ embeds: [tradeEmbed] });
+    await interaction.editReply({ embeds: [embed] });
 
+    // Overflow
     if (advice.advice.length > 1024) {
-      const overflowEmbed = new EmbedBuilder()
-        .setColor(COLORS.NAVY)
-        .setDescription(advice.advice.slice(1024))
-        .setFooter({ text: FOOTER.text });
-      await interaction.followUp({ embeds: [overflowEmbed] });
+      await interaction.followUp({
+        embeds: [createEmbed(COLORS.NAVY)
+          .setDescription(advice.advice.slice(1024, 4096))
+          .setFooter({ text: 'AccessGrantedSportz' })]
+      });
     }
 
   } catch (error) {
-    console.error('❌ Tradecheck error:', error);
+    console.error('Tradecheck error:', error);
     try {
-      await interaction.editReply('❌ Error analyzing trade. Please try again.');
-    } catch {
-      // Ignore
-    }
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.DANGER)
+          .setTitle('Error')
+          .setDescription('Error analyzing trade. Please try again.')]
+      });
+    } catch { /* ignore */ }
   }
 };

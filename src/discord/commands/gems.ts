@@ -67,9 +67,9 @@ export const execute = async (
         gem.gem_tier === 'SOLID_GEM'  ? '🔹' : '⚪';
 
       const devLabel =
-        gem.dev_trait === 'xfactor'   ? '⚡ XFactor'  :
-        gem.dev_trait === 'superstar' ? '⭐ Superstar' :
-        gem.dev_trait === 'star'      ? '🌟 Star'      : '📋 Normal';
+        gem.dev_trait === 'xfactor'   ? ' XFactor'  :
+        gem.dev_trait === 'superstar' ? ' Superstar' :
+        gem.dev_trait === 'star'      ? ' Star'      : ' Normal';
 
       return {
         name:
@@ -79,7 +79,7 @@ export const execute = async (
         value:
           `OVR: **${gem.overall_rating}** | Age: ${gem.age} | ${devLabel}\n` +
           `Gem Score: **${gem.trapped_gem_score}** | ${gem.gem_tier}\n` +
-          `📋 ${gem.gem_reasons[0]}`,
+          ` ${gem.gem_reasons[0]}`,
         inline: false
       };
     });

@@ -43,7 +43,7 @@ export const execute = async (interaction: ChatInputCommandInteraction) => {
 
         // 2. Build the Commissioner Review Embed
         const tradeEmbed = new EmbedBuilder()
-            .setTitle('🏈 New Trade Proposal')
+            .setTitle('New Trade Proposal')
             .setColor('#f1c40f')
             .addFields(
                 { name: `${proposerTeam.rows[0].name} Sends`, value: givingNames || 'N/A', inline: true },

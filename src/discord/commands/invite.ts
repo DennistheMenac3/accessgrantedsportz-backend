@@ -94,7 +94,7 @@ export const execute = async (
         { name: '👥 Spots',       value: '32 available',                     inline: true },
         { name: '🔗 Invite Link', value: inviteUrl,                          inline: false },
         {
-          name:  '📋 Share This With Your League',
+          name:  'Share This With Your League',
           value:
             `🏈 **Join ${league.name} on AccessGrantedSportz!**\n\n` +
             `1. Click the link: **${inviteUrl}**\n` +

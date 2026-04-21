@@ -152,9 +152,9 @@ export const execute = async (
           `You'll be tagged in score updates as <@${discordUserId}>`
         )
         .addFields(
-          { name: '🏈 Team',    value: `${team.abbreviation} — ${team.name}`, inline: true },
-          { name: '📊 Record',  value: `${team.wins}-${team.losses}`,          inline: true },
-          { name: '⭐ Overall', value: `${team.overall_rating}`,               inline: true }
+          { name: 'Team',    value: `${team.abbreviation} — ${team.name}`, inline: true },
+          { name: 'Record',  value: `${team.wins}-${team.losses}`,          inline: true },
+          { name: 'Overall', value: `${team.overall_rating}`,               inline: true }
         )]
     });
 

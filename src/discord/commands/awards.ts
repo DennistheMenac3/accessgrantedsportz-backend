@@ -41,9 +41,9 @@ export const execute = async (
     }
 
     const devEmoji = (dev: string) =>
-      dev === 'xfactor'   ? '⚡' :
-      dev === 'superstar' ? '⭐' :
-      dev === 'star'      ? '🌟' : '';
+      dev === 'xfactor'   ? '' :
+      dev === 'superstar' ? '' :
+      dev === 'star'      ? '' : '';
 
     const categoryEmoji = (cat: string) =>
       cat === 'individual'  ? '👤' :

@@ -1,9 +1,10 @@
 import {
   SlashCommandBuilder,
-  ChatInputCommandInteraction
+  ChatInputCommandInteraction,
+  AutocompleteInteraction
 } from 'discord.js';
 import { query } from '../../config/database';
-import { COLORS, createEmbed } from '../../config/brand';
+import { COLORS, createEmbed, getDevTraitIcon, getDevTraitLabel } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -20,13 +21,43 @@ const getLeagueForServer = async (guildId: string): Promise<any | null> => {
 
 export const data = new SlashCommandBuilder()
   .setName('value')
-  .setDescription('💰 Get a player\'s trade value score and breakdown')
+  .setDescription('Get a player trade value score')
   .addStringOption(option =>
     option
       .setName('player')
-      .setDescription('Player name (first last)')
+      .setDescription('Player name (supports autocomplete)')
       .setRequired(true)
+      .setAutocomplete(true)
   );
+
+export const autocomplete = async (
+  interaction: AutocompleteInteraction
+): Promise<void> => {
+  const league = await getLeagueForServer(interaction.guildId!);
+  if (!league) { await interaction.respond([]); return; }
+
+  const focused = interaction.options.getFocused().toLowerCase();
+  if (!focused || focused.length < 2) { await interaction.respond([]); return; }
+
+  try {
+    const result = await query(
+      `SELECT p.id, p.first_name, p.last_name, p.position, t.abbreviation
+       FROM players p
+       LEFT JOIN teams t ON t.id = p.team_id
+       WHERE p.league_id = $1
+       AND LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER($2)
+       ORDER BY p.overall_rating DESC
+       LIMIT 25`,
+      [league.id, `%${focused}%`]
+    );
+    await interaction.respond(
+      result.rows.map((p: any) => ({
+        name:  `${p.first_name} ${p.last_name} — ${p.position} | ${p.abbreviation || 'FA'}`,
+        value: p.id
+      }))
+    );
+  } catch { await interaction.respond([]); }
+};
 
 export const execute = async (
   interaction: ChatInputCommandInteraction
@@ -38,24 +69,27 @@ export const execute = async (
     if (!league) {
       await interaction.editReply({
         embeds: [createEmbed(COLORS.DANGER)
-          .setTitle('❌ No League Connected')
+          .setTitle('No League Connected')
           .setDescription('No league is connected to this server.')]
       });
       return;
     }
 
-    const playerName = interaction.options.getString('player', true);
+    const input = interaction.options.getString('player', true);
 
+    // UUID from autocomplete or fuzzy name search
+    const isUUID = input.length === 36 && input.includes('-');
     const result = await query(
       `SELECT
-        p.first_name, p.last_name,
+        p.id, p.first_name, p.last_name,
         p.position, p.overall_rating,
         p.age, p.dev_trait, p.speed,
+        p.years_pro, p.portrait_url,
+        p.contract_salary, p.contract_years,
         t.name         as team_name,
         t.abbreviation as team_abbr,
         t.wins, t.losses,
         COALESCE(tvh.total_value, 0) as trade_value,
-        tvh.value_breakdown,
         tvh.calculated_at
        FROM players p
        LEFT JOIN teams t ON t.id = p.team_id
@@ -63,103 +97,119 @@ export const execute = async (
          ON tvh.player_id  = p.id
          AND tvh.league_id = p.league_id
        WHERE p.league_id = $1
-       AND (
-         LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER($2)
-         OR LOWER(p.first_name) LIKE LOWER($2)
-         OR LOWER(p.last_name)  LIKE LOWER($2)
-         OR LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER('%' || $2 || '%')
-       )
+       AND ${isUUID
+         ? 'p.id = $2'
+         : `LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER('%' || $2 || '%')`
+       }
        ORDER BY tvh.calculated_at DESC
-       LIMIT 1`,
-      [league.id, playerName]
+       LIMIT 10`,
+      [league.id, input]
     );
 
     if (result.rows.length === 0) {
       await interaction.editReply({
         embeds: [createEmbed(COLORS.DANGER)
-          .setTitle('❌ Player Not Found')
-          .setDescription(`Player "${playerName}" not found in your league.`)]
+          .setTitle('Player Not Found')
+          .setDescription(
+            `No players matching "${input}" found.\n` +
+            `Try using the autocomplete dropdown for best results.`
+          )]
+      });
+      return;
+    }
+
+    // Multiple results — show list
+    if (result.rows.length > 1 && !isUUID) {
+      const fields = result.rows.map((p: any, i: number) => ({
+        name:  `${i + 1}. ${p.first_name} ${p.last_name}`,
+        value:
+          `${p.position} | ${p.team_abbr || 'FA'} ` +
+          `(${p.wins || 0}-${p.losses || 0}) | ` +
+          `OVR: ${p.overall_rating} | ` +
+          `TVS: ${parseFloat(p.trade_value).toFixed(1)}`,
+        inline: false
+      }));
+
+      await interaction.editReply({
+        embeds: [createEmbed(COLORS.NAVY)
+          .setTitle('Multiple Players Found')
+          .setDescription('Use the autocomplete dropdown to select the exact player.')
+          .addFields(fields)
+          .setFooter({ text: 'AccessGrantedSportz  ·  Access Granted. Game On.' })]
       });
       return;
     }
 
     const player     = result.rows[0];
     const tradeValue = parseFloat(player.trade_value);
-    const breakdown  = player.value_breakdown || {};
+    const devLabel   = getDevTraitLabel(player.dev_trait);
+    const devIcon    = getDevTraitIcon(player.dev_trait);
+    const profileUrl = `https://accessgrantedsportz.com/player/${player.id}`;
 
-    const devLabel =
-      player.dev_trait === 'xfactor'   ? '⚡ XFactor'  :
-      player.dev_trait === 'superstar' ? '⭐ Superstar' :
-      player.dev_trait === 'star'      ? '🌟 Star'      : '📋 Normal';
-
-    // Color based on trade value tier
     const valueColor =
-      tradeValue >= 200 ? COLORS.GOLD    :
-      tradeValue >= 150 ? COLORS.ORANGE  :
-      tradeValue >= 100 ? COLORS.NAVY    :
-      tradeValue >= 50  ? COLORS.NAVY    :
-      COLORS.DANGER;
+      tradeValue >= 200 ? COLORS.GOLD   :
+      tradeValue >= 100 ? COLORS.ORANGE :
+      COLORS.NAVY;
 
     const valueTier =
-      tradeValue >= 200 ? '👑 ELITE'         :
-      tradeValue >= 150 ? '💎 FRANCHISE'      :
-      tradeValue >= 100 ? '⭐ PREMIUM'        :
-      tradeValue >= 50  ? '✅ SOLID STARTER'  :
-      '📋 DEPTH';
+      tradeValue >= 200 ? 'ELITE'        :
+      tradeValue >= 150 ? 'FRANCHISE'    :
+      tradeValue >= 100 ? 'PREMIUM'      :
+      tradeValue >= 50  ? 'SOLID STARTER':
+      'DEPTH';
 
     const embed = createEmbed(valueColor)
+      .setAuthor({ name: devLabel, iconURL: devIcon })
       .setTitle(
-        `💰 ${player.first_name} ${player.last_name} | Trade Value Report`
+        `${player.first_name} ${player.last_name}  ·  ` +
+        `${player.position}  ·  ` +
+        `${player.team_abbr || 'FA'}  ·  ` +
+        `${player.overall_rating} OVR`
       )
+      .setURL(profileUrl)
       .setDescription(
-        `${player.position} | ${player.team_name} ` +
-        `(${player.wins}-${player.losses})\n` +
-        `${devLabel} | ${valueTier}`
+        `${player.team_name || 'Free Agent'}` +
+        `${player.team_abbr ? `  (${player.wins || 0}-${player.losses || 0})` : ''}`
       )
       .addFields(
         {
-          name:   '📊 Player Info',
+          name:   'Ratings',
           value:
-            `**Overall:** ${player.overall_rating}\n` +
-            `**Age:** ${player.age}\n` +
-            `**Speed:** ${player.speed}\n` +
-            `**Dev Trait:** ${devLabel}`,
+            `Overall        ${player.overall_rating || '—'}\n` +
+            `Speed           ${player.speed         || '—'}\n` +
+            `Age              ${player.age          || '—'}\n` +
+            `Experience    ${player.years_pro ?? '—'} yrs`,
           inline: true
         },
         {
-          name:   '💰 Trade Value',
+          name:   'Trade Value',
           value:
-            `**TVS: ${tradeValue.toFixed(1)}**\n` +
-            `Tier: ${valueTier}`,
+            `TVS   ${tradeValue.toFixed(1)}\n` +
+            `Tier   ${valueTier}`,
           inline: true
         }
       );
 
-    // Add breakdown if available
-    if (breakdown && Object.keys(breakdown).length > 0) {
-      embed.addFields(
-        {
-          name:
-            '📈 Value Breakdown',
-          value:
-            `📊 Base Value:    **${breakdown.base_value      || 0}**\n` +
-            `⚡ Speed Bonus:   **${breakdown.speed_bonus     || 0}**\n` +
-            `🧬 Dev/Age Bonus: **${breakdown.dev_trait_age_bonus || 0}**\n` +
-            `🏋️ Trait Bonus:   **${breakdown.trait_bonus     || 0}**\n` +
-            `🏆 Award Bonus:   **${breakdown.award_bonus     || 0}**\n` +
-            `📈 Trend Bonus:   **${breakdown.trend_bonus     || 0}**`,
-          inline: true
-        },
-        {
-          name:   '✖️ Multipliers',
-          value:
-            `📅 Age:      **${breakdown.age_multiplier       || 1}x**\n` +
-            `🏈 Position: **${breakdown.position_multiplier  || 1}x**\n` +
-            `⚡ Dev:      **${breakdown.dev_trait_multiplier || 1}x**`,
-          inline: true
-        }
-      );
+    if (player.portrait_url) embed.setThumbnail(player.portrait_url);
+
+    if (player.contract_salary) {
+      embed.addFields({
+        name:   'Contract',
+        value:
+          `Salary  $${(player.contract_salary / 1000000).toFixed(2)}M\n` +
+          `Years    ${player.contract_years || '—'}`,
+        inline: true
+      });
     }
+
+    embed
+      .setFooter({
+        text:
+          'TVS — Trade Value Score  ·  ' +
+          'ELITE 200+  ·  FRANCHISE 150+  ·  PREMIUM 100+  ·  ' +
+          'SOLID 50+  ·  DEPTH <50  ·  AccessGrantedSportz'
+      })
+      .setTimestamp();
 
     await interaction.editReply({ embeds: [embed] });
 
@@ -167,7 +217,7 @@ export const execute = async (
     console.error('Value error:', error);
     await interaction.editReply({
       embeds: [createEmbed(COLORS.DANGER)
-        .setTitle('❌ Error')
+        .setTitle('Error')
         .setDescription('Error fetching trade value. Please try again.')]
     });
   }

@@ -62,7 +62,7 @@ export const execute = async (
     if (weeksResult.rows.length === 0) {
       await interaction.editReply({
         embeds: [createEmbed(COLORS.NAVY)
-          .setTitle('📰 Game Recap')
+          .setTitle('Game Recap')
           .setDescription('No games found in your league yet.')]
       });
       return;
@@ -71,13 +71,13 @@ export const execute = async (
     const weekOptions = weeksResult.rows.map((row: any) => ({
       label: `Week ${row.week}`,
       value: `week_${row.week}`,
-      emoji: '📅'
+      emoji: ''
     }));
 
     weekOptions.unshift({
-      label: '📊 Full Season Summary',
+      label: ' Full Season Summary',
       value: 'season_summary',
-      emoji: '🏆'
+      emoji: ''
     });
 
     const weekMenu = new StringSelectMenuBuilder()
@@ -90,7 +90,7 @@ export const execute = async (
 
     await interaction.editReply({
       embeds: [createEmbed(COLORS.NAVY)
-        .setTitle(`📰 Game Recap | ${league.name}`)
+        .setTitle(` Game Recap | ${league.name}`)
         .setDescription('Select a week to get started:')],
       components: [weekRow]
     });
@@ -143,13 +143,13 @@ export const execute = async (
         const fields = Object.entries(weekGroups)
           .slice(0, 25)
           .map(([week, games]) => ({
-            name:   `📅 Week ${week}`,
+            name:   ` Week ${week}`,
             value:  (games as any[]).map((game: any) => {
               const homeWon = game.home_score > game.away_score;
               return (
-                `${homeWon ? '' : '🏆 '}**${game.away_abbr}** ` +
+                `${homeWon ? '' : 'Winner '}**${game.away_abbr}** ` +
                 `${game.away_score} - ${game.home_score} ` +
-                `**${game.home_abbr}**${homeWon ? ' 🏆' : ''}`
+                `**${game.home_abbr}**${homeWon ? 'Winner' : ''}`
               );
             }).join('\n'),
             inline: false
@@ -198,14 +198,14 @@ export const execute = async (
         label:       `${game.away_abbr} ${game.away_score} - ${game.home_score} ${game.home_abbr}`,
         description: `${game.away_team} vs ${game.home_team}`,
         value:       game.id,
-        emoji:       game.away_score > game.home_score ? '🏆' : '🏈'
+        emoji:       game.away_score > game.home_score ? '' : ''
       }));
 
       gameOptions.unshift({
-        label:       `📊 All Week ${weekNum} Scores`,
+        label:       `All Week ${weekNum} Scores`,
         description: 'See all game scores for this week',
         value:       `week_scores_${weekNum}`,
-        emoji:       '📅'
+        emoji:       ''
       });
 
       const gameMenu = new StringSelectMenuBuilder()
@@ -218,7 +218,7 @@ export const execute = async (
 
       await interaction.editReply({
         embeds: [createEmbed(COLORS.NAVY)
-          .setTitle(`📰 Week ${weekNum} Games | ${league.name}`)
+          .setTitle(`Week ${weekNum} Games | ${league.name}`)
           .setDescription('Select a game to recap:')],
         components: [gameRow]
       });
@@ -244,9 +244,9 @@ export const execute = async (
             const awayWon = game.away_score > game.home_score;
             return {
               name:
-                `${awayWon ? '🏆 ' : ''}${game.away_abbr} ` +
+                `${awayWon ? 'Winner ' : ''}${game.away_abbr} ` +
                 `${game.away_score} - ${game.home_score} ` +
-                `${game.home_abbr}${homeWon ? ' 🏆' : ''}`,
+                `${game.home_abbr}${homeWon ? ' Winner' : ''}`,
               value:
                 `${game.away_wins}-${game.away_losses} | ` +
                 `${game.home_wins}-${game.home_losses}`,
@@ -256,7 +256,7 @@ export const execute = async (
 
           await interaction.editReply({
             embeds: [createEmbed(COLORS.NAVY)
-              .setTitle(`🏈 Week ${weekNum} Scores | ${league.name}`)
+              .setTitle(`Week ${weekNum} Scores | ${league.name}`)
               .setDescription(`Season ${league.current_season}`)
               .addFields(fields)],
             components: []

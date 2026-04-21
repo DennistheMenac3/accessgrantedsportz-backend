@@ -37,9 +37,9 @@ export const data = new SlashCommandBuilder()
       .setDescription('How to display standings')
       .setRequired(false)
       .addChoices(
-        { name: '🏈 Overall',       value: 'overall'    },
-        { name: '🗺️ By Division',   value: 'division'   },
-        { name: '🏟️ By Conference', value: 'conference' }
+        { name: 'Overall',       value: 'overall'    },
+        { name: 'By Division',   value: 'division'   },
+        { name:  'By Conference', value: 'conference' }
       )
   );
 
@@ -94,7 +94,7 @@ export const execute = async (
     }
 
     const medal = (i: number) =>
-      i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+      i === 0 ? '' : i === 1 ? '' : i === 2 ? '' : `${i + 1}.`;
 
     let embed;
 
@@ -107,8 +107,8 @@ export const execute = async (
       });
 
       const fields = Object.keys(divisions).sort().map(division => {
-        const conf  = division.startsWith('AFC') ? '🔵' :
-                      division.startsWith('NFC') ? '🔴' : '⚠️';
+        const conf  = division.startsWith('AFC') ? '' :
+                      division.startsWith('NFC') ? '' : '';
         const value = divisions[division].map((team: any, i: number) =>
           `${medal(i)} **${team.abbreviation}** ${team.wins}-${team.losses} ` +
           `| OVR: ${team.overall_rating}` +
@@ -123,7 +123,7 @@ export const execute = async (
       });
 
       embed = createEmbed(COLORS.NAVY)
-        .setTitle(`🗺️ Division Standings | ${league.name}`)
+        .setTitle(`Division Standings | ${league.name}`)
         .setDescription(
           `Season ${league.current_season} | Week ${league.current_week}`
         )
@@ -140,7 +140,7 @@ export const execute = async (
       const fields = ['AFC', 'NFC', 'Unassigned']
         .filter(conf => conferences[conf])
         .map(conf => {
-          const emoji = conf === 'AFC' ? '🔵' : conf === 'NFC' ? '🔴' : '⚠️';
+          const emoji = conf === 'AFC' ? '' : conf === 'NFC' ? '' : '';
           const value = conferences[conf]
             .sort((a: any, b: any) => b.wins - a.wins)
             .map((team: any, i: number) =>
@@ -156,7 +156,7 @@ export const execute = async (
         });
 
       embed = createEmbed(COLORS.NAVY)
-        .setTitle(`🏟️ Conference Standings | ${league.name}`)
+        .setTitle(`Conference Standings | ${league.name}`)
         .setDescription(
           `Season ${league.current_season} | Week ${league.current_week}`
         )
@@ -178,7 +178,7 @@ export const execute = async (
       }));
 
       embed = createEmbed(COLORS.NAVY)
-        .setTitle(`📊 Overall Standings | ${league.name}`)
+        .setTitle(`Overall Standings | ${league.name}`)
         .setDescription(
           `Season ${league.current_season} | Week ${league.current_week}`
         )

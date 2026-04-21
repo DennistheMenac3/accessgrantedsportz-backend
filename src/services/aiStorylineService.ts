@@ -1148,15 +1148,27 @@ export const generatePostGameRecap = async (
   gameId:   string,
   season:   number
 ): Promise<string> => {
+
+  // Get game info with team records
   const gameResult = await query(
     `SELECT g.*,
-      ht.name as home_team_name,
-      ht.abbreviation as home_abbr,
-      at.name as away_team_name,
-      at.abbreviation as away_abbr
+      ht.name            as home_team_name,
+      ht.abbreviation    as home_abbr,
+      ht.wins            as home_wins,
+      ht.losses          as home_losses,
+      ht.overall_rating  as home_ovr,
+      at.name            as away_team_name,
+      at.abbreviation    as away_abbr,
+      at.wins            as away_wins,
+      at.losses          as away_losses,
+      at.overall_rating  as away_ovr,
+      hu.username        as home_owner,
+      au.username        as away_owner
      FROM games g
      LEFT JOIN teams ht ON ht.id = g.home_team_id
      LEFT JOIN teams at ON at.id = g.away_team_id
+     LEFT JOIN users hu ON hu.id = ht.owner_id
+     LEFT JOIN users au ON au.id = at.owner_id
      WHERE g.id = $1`,
     [gameId]
   );
@@ -1164,47 +1176,235 @@ export const generatePostGameRecap = async (
   if (gameResult.rows.length === 0) return '';
   const game = gameResult.rows[0];
 
+  // Get full player stat lines — only players who actually played
   const statsResult = await query(
     `SELECT
       p.first_name, p.last_name,
       p.position, p.overall_rating,
-      p.dev_trait, p.age,
-      t.name as team_name,
-      gs.*
+      p.dev_trait, p.age, p.speed,
+      p.years_pro,
+      t.name            as team_name,
+      t.abbreviation    as team_abbr,
+      gs.pass_yards,       gs.pass_attempts,
+      gs.pass_completions, gs.pass_touchdowns,
+      gs.interceptions,
+      gs.rush_attempts,    gs.rush_yards,
+      gs.rush_touchdowns,
+      gs.receptions,       gs.receiving_yards,
+      gs.receiving_touchdowns,
+      gs.tackles,          gs.sacks,
+      gs.forced_fumbles,   gs.fumbles_recovered,
+      gs.passes_defended,  gs.interceptions     as def_interceptions,
+      gs.yards_allowed
      FROM game_stats gs
      JOIN players p ON p.id = gs.player_id
-     JOIN teams t ON t.id = gs.team_id
-     WHERE gs.game_id = $1`,
+     JOIN teams   t ON t.id = gs.team_id
+     WHERE gs.game_id = $1
+     AND (
+       gs.pass_yards        > 0 OR
+       gs.rush_yards        > 0 OR
+       gs.receiving_yards   > 0 OR
+       gs.tackles           > 0 OR
+       gs.sacks             > 0 OR
+       gs.pass_touchdowns   > 0 OR
+       gs.rush_touchdowns   > 0 OR
+       gs.receiving_touchdowns > 0 OR
+       gs.interceptions     > 0 OR
+       gs.forced_fumbles    > 0
+     )
+     ORDER BY
+       (COALESCE(gs.pass_yards, 0) +
+        COALESCE(gs.rush_yards, 0) +
+        COALESCE(gs.receiving_yards, 0)) DESC`,
     [gameId]
   );
 
-  const systemPrompt = `You are the official beat reporter for 
-AccessGrantedSportz. You write professional, engaging sports articles 
-that sound like ESPN or NFL.com. Energetic, uses sports terminology, 
-highlights the most interesting storylines. Always third person. 
-150-250 words. Never mention video games or simulation.`;
+  const stats     = statsResult.rows;
+  const winner    = game.home_score > game.away_score
+    ? game.home_team_name : game.away_team_name;
+  const loser     = game.home_score > game.away_score
+    ? game.away_team_name : game.home_team_name;
+  const margin    = Math.abs(game.home_score - game.away_score);
+  const isBlowout = margin >= 21;
+  const isClose   = margin <= 7;
+  const wasOT     = game.went_to_ot || false;
 
-  const userPrompt = `Write a post-game recap for:
-GAME: ${game.home_team_name} ${game.home_score} vs ${game.away_team_name} ${game.away_score}
-WEEK: ${game.week} | SEASON: ${season}
-WINNER: ${game.home_score > game.away_score ? game.home_team_name : game.away_team_name}
+  // =============================================
+  // BUILD STRUCTURED STAT CONTEXT
+  // Group by team and position
+  // =============================================
+  const homeStats = stats.filter(
+    (s: any) => s.team_abbr === game.home_abbr
+  );
+  const awayStats = stats.filter(
+    (s: any) => s.team_abbr === game.away_abbr
+  );
 
-PLAYER STATS:
-${statsResult.rows.map((s: any) => `
-${s.first_name} ${s.last_name} (${s.position} - ${s.team_name}):
-Pass: ${s.pass_yards}yds/${s.pass_touchdowns}TDs/${s.interceptions}INTs
-Rush: ${s.rush_yards}yds/${s.rush_touchdowns}TDs
-Rec: ${s.receptions}rec/${s.receiving_yards}yds/${s.receiving_touchdowns}TDs
-Def: ${s.tackles}tkl/${s.sacks}sacks
-`).join('\n')}
+  const formatPlayerLine = (s: any): string => {
+    const lines: string[] = [];
 
-Write a compelling recap highlighting key performances and what this means for both teams.`;
+    if (s.pass_attempts > 0) {
+      lines.push(
+        `${s.pass_completions}/${s.pass_attempts} ` +
+        `${s.pass_yards} yds ${s.pass_touchdowns} TD` +
+        `${s.interceptions > 0 ? ` ${s.interceptions} INT` : ''}`
+      );
+    }
+    if (s.rush_attempts > 0) {
+      lines.push(
+        `${s.rush_attempts} car ${s.rush_yards} yds` +
+        `${s.rush_touchdowns > 0 ? ` ${s.rush_touchdowns} TD` : ''}`
+      );
+    }
+    if (s.receptions > 0) {
+      lines.push(
+        `${s.receptions} rec ${s.receiving_yards} yds` +
+        `${s.receiving_touchdowns > 0 ? ` ${s.receiving_touchdowns} TD` : ''}`
+      );
+    }
+    if (s.tackles > 0 || s.sacks > 0) {
+      lines.push(
+        `${s.tackles > 0 ? `${s.tackles} tkl` : ''}` +
+        `${s.sacks > 0 ? ` ${s.sacks} sck` : ''}` +
+        `${s.def_interceptions > 0 ? ` ${s.def_interceptions} INT` : ''}` +
+        `${s.forced_fumbles > 0 ? ` ${s.forced_fumbles} FF` : ''}`
+      );
+    }
+
+    const devLabel =
+      s.dev_trait === 'xfactor'   ? '[X-Factor]'  :
+      s.dev_trait === 'superstar' ? '[Superstar]'  :
+      s.dev_trait === 'star'      ? '[Star]'       : '';
+
+    return `${s.first_name} ${s.last_name} ` +
+      `${devLabel} (${s.position} ${s.team_abbr} OVR:${s.overall_rating})\n` +
+      lines.filter(Boolean).join(' | ');
+  };
+
+  const homeStatLines = homeStats
+    .slice(0, 8)
+    .map(formatPlayerLine)
+    .join('\n');
+
+  const awayStatLines = awayStats
+    .slice(0, 8)
+    .map(formatPlayerLine)
+    .join('\n');
+
+  // Team totals
+  const homeTotalYards = homeStats.reduce(
+    (sum: number, s: any) =>
+      sum + (s.pass_yards || 0) + (s.rush_yards || 0), 0
+  );
+  const awayTotalYards = awayStats.reduce(
+    (sum: number, s: any) =>
+      sum + (s.pass_yards || 0) + (s.rush_yards || 0), 0
+  );
+  const homeSacks = homeStats.reduce(
+    (sum: number, s: any) => sum + (s.sacks || 0), 0
+  );
+  const awaySacks = awayStats.reduce(
+    (sum: number, s: any) => sum + (s.sacks || 0), 0
+  );
+  const homeTOs = homeStats.reduce(
+    (sum: number, s: any) =>
+      sum + (s.interceptions || 0) + (s.fumbles_recovered || 0), 0
+  );
+  const awayTOs = awayStats.reduce(
+    (sum: number, s: any) =>
+      sum + (s.interceptions || 0) + (s.fumbles_recovered || 0), 0
+  );
+
+  // =============================================
+  // SYSTEM PROMPT — strict data-only
+  // =============================================
+  const systemPrompt =
+  `You are the official analyst for AccessGrantedSportz, ` +
+  `a competitive Madden Connected Franchise league.\n\n` +
+  
+    `CRITICAL RULES:\n` +
+    `1. Base your recap EXCLUSIVELY on the stat data provided. ` +
+    `Do not invent plays, drives, or moments not supported by the stats.\n` +
+    `2. Do not reference real NFL history, Super Bowls, or real-world ` +
+    `player reputations. This is a custom league universe.\n` +
+    `3. Do not assume any player or team is good or bad based on ` +
+    `real-world knowledge. Judge only by the numbers given.\n` +
+    `4. Never mention video games, simulation, or Madden.\n` +
+    `5. Write in third person. Professional sports journalism tone.\n` +
+    `6. 200-300 words. Tight, punchy, no filler sentences.\n` +
+    `7. Lead with the most compelling storyline the data supports — ` +
+    `a dominant performance, a comeback, a defensive battle, a blowout.\n` +
+    `8. Highlight dev trait players (X-Factor, Superstar) naturally ` +
+    `when their stats warrant it — not just because of their trait.\n` +
+    `9. Close with what this result means for both teams' seasons.`
+
+    const CRITICAL_RULES =
+  `CRITICAL RULES — FOLLOW WITHOUT EXCEPTION:\n` +
+  `1. Base ALL analysis EXCLUSIVELY on the league data provided in this prompt. ` +
+  `No exceptions.\n` +
+  `2. Do NOT reference real NFL history, Super Bowl results, playoff records, ` +
+  `championships, or any real-world outcomes.\n` +
+  `3. Do NOT assume any team or player is elite based on their real NFL reputation. ` +
+  `A 1-10 Kansas City Chiefs team is a bad team in this league. ` +
+  `A 10-1 Jacksonville Jaguars team is the best team in this league. ` +
+  `Judge only by the numbers in front of you.\n` +
+  `4. Do NOT mention Patrick Mahomes, Josh Allen, Lamar Jackson, or any player ` +
+  `by name unless they appear in the league data provided with actual stats.\n` +
+  `5. Do NOT give any franchise preferential treatment based on real-world ` +
+  `popularity — Cowboys, Patriots, Chiefs, 49ers, etc. are treated identically ` +
+  `to any other team. Their record in THIS league is all that matters.\n` +
+  `6. If a star player has poor stats in this league, reflect that honestly. ` +
+  `Do not invent excuses or imply they are still elite despite the numbers.\n` +
+  `7. If a low-profile player has elite stats in this league, give them ` +
+  `full credit. The data is the truth.\n` +
+  `8. Never mention video games, simulation, Madden, or anything that breaks ` +
+  `the immersion of a real professional league.\n` +
+  `9. Never invent statistics, plays, drives, or events not present in the data. ` +
+  `If the data is sparse, write less. Do not pad with fiction.\n` +
+  `10. This league exists in its own universe. Real-world trades, injuries, ` +
+  `retirements, and news have zero relevance here.`;
+
+  // =============================================
+  // USER PROMPT — rich data context
+  // =============================================
+  const userPrompt =
+    `Write a post-game recap for the following game.\n\n` +
+
+    `FINAL SCORE:\n` +
+    `${game.away_team_name} (${game.away_wins}-${game.away_losses}) ` +
+    `${game.away_score}  @  ` +
+    `${game.home_team_name} (${game.home_wins}-${game.home_losses}) ` +
+    `${game.home_score}\n` +
+    `Week ${game.week} | Season ${season}\n` +
+    `Winner: ${winner} by ${margin} points\n` +
+    `Game type: ${isBlowout ? 'BLOWOUT' : isClose ? 'CLOSE GAME' : 'DECISIVE'}` +
+    `${wasOT ? ' (OVERTIME)' : ''}\n\n` +
+
+    `TEAM TOTALS:\n` +
+    `${game.away_team_name}: ` +
+    `${awayTotalYards} total yards | ` +
+    `${awaySacks} sacks | ` +
+    `${awayTOs} takeaways\n` +
+    `${game.home_team_name}: ` +
+    `${homeTotalYards} total yards | ` +
+    `${homeSacks} sacks | ` +
+    `${homeTOs} takeaways\n\n` +
+
+    `${game.away_team_name.toUpperCase()} PLAYER STATS:\n` +
+    `${awayStatLines || 'No stat data available'}\n\n` +
+
+    `${game.home_team_name.toUpperCase()} PLAYER STATS:\n` +
+    `${homeStatLines || 'No stat data available'}\n\n` +
+
+    `Write the recap now. Use only the data above.`;
 
   const recap = await callClaude(systemPrompt, userPrompt);
+
   await saveStoryline(
     leagueId, season, game.week,
     'game_recap', recap, { game_id: gameId }
   );
+
   return recap;
 };
 
@@ -1227,6 +1427,7 @@ export const generateTradeRumors = async (
 "Word on the Street" on AccessGrantedSportz. This is the league's 
 premier rumor and insider news column. You write in the style of 
 a credible NFL insider reporter. Your reports sound urgent and inside.
+Professional scout. Clinical assessment.
 
 Use phrases like:
 - "Word on the street is..."
@@ -1235,10 +1436,41 @@ Use phrases like:
 - "According to insiders"
 - "The asking price is expected to be"
 - "Sources close to the situation"
+-"Inside sources, league whispers, realistic trade speculation"
 
 Never reference ESPN, NFL Network, or any specific media outlets.
 All reporting is exclusive to AccessGrantedSportz.
-Never mention video games. Write as if this is real NFL news.`;
+Never mention video games. Write as if this is real NFL news.
+based only on the roster and record data provided.
+Never speculate about players not in the data.
+Base every observation strictly on the stats and ratings provided.
+Do not assume abilities or weaknesses not shown in the data.`
+
+const CRITICAL_RULES =
+  `CRITICAL RULES — FOLLOW WITHOUT EXCEPTION:\n` +
+  `1. Base ALL analysis EXCLUSIVELY on the league data provided in this prompt. ` +
+  `No exceptions.\n` +
+  `2. Do NOT reference real NFL history, Super Bowl results, playoff records, ` +
+  `championships, or any real-world outcomes.\n` +
+  `3. Do NOT assume any team or player is elite based on their real NFL reputation. ` +
+  `A 1-10 Kansas City Chiefs team is a bad team in this league. ` +
+  `A 10-1 Jacksonville Jaguars team is the best team in this league. ` +
+  `Judge only by the numbers in front of you.\n` +
+  `4. Do NOT mention Patrick Mahomes, Josh Allen, Lamar Jackson, or any player ` +
+  `by name unless they appear in the league data provided with actual stats.\n` +
+  `5. Do NOT give any franchise preferential treatment based on real-world ` +
+  `popularity — Cowboys, Patriots, Chiefs, 49ers, etc. are treated identically ` +
+  `to any other team. Their record in THIS league is all that matters.\n` +
+  `6. If a star player has poor stats in this league, reflect that honestly. ` +
+  `Do not invent excuses or imply they are still elite despite the numbers.\n` +
+  `7. If a low-profile player has elite stats in this league, give them ` +
+  `full credit. The data is the truth.\n` +
+  `8. Never mention video games, simulation, Madden, or anything that breaks ` +
+  `the immersion of a real professional league.\n` +
+  `9. Never invent statistics, plays, drives, or events not present in the data. ` +
+  `If the data is sparse, write less. Do not pad with fiction.\n` +
+  `10. This league exists in its own universe. Real-world trades, injuries, ` +
+  `retirements, and news have zero relevance here.`;
 
   const contextStr = `
 LEAGUE: ${context.league?.name} | Season ${season} | Week ${week}
@@ -1312,102 +1544,137 @@ export const generatePowerRankings = async (
   leagueId: string,
   season:   number,
   week:     number,
-  style:    'standard' | 'stephen_a' = 'standard'
-): Promise<{
-  rankings: string;
-  style:    string;
-}> => {
-  const context = await getLeagueContext(leagueId, season);
+  style:    'standard' | 'stephen_a' = 'stephen_a'
+): Promise<{ rankings: string }> => {
 
-  const standardPrompt = `You are the official power rankings analyst for 
-AccessGrantedSportz. Data-driven, entertaining, bold. 
-Write like a top ESPN analyst. Under 400 words.`;
-
-  const stephenAPrompt = `You are "The Analyst" — the host of 
-"The Hot Seat" on AccessGrantedSportz. You are LOUD, PASSIONATE 
-and OPINIONATED in the style of a fiery sports television personality.
-You use ALL CAPS for emphasis. You are not afraid to call teams 
-and players out by name. You get personally offended by bad 
-performances. You praise greatness dramatically.
-
-Your signature phrases include:
-- "I am SCREAMING from the rooftops"
-- "How DARE you"
-- "Quite frankly"
-- "I'll say it AGAIN"
-- "Don't @ me"
-- "SOMEBODY STOP ME"
-- "This is an OUTRAGE"
-- "I cannot in GOOD CONSCIENCE"
-
-You are exclusive to AccessGrantedSportz. Never reference ESPN, 
-First Take, Get Up, or any other TV networks or shows.
-Never mention video games. Write as if this is real NFL analysis.
-Keep total response under 500 words.`;
-
-  const systemPrompt = style === 'stephen_a'
-    ? stephenAPrompt
-    : standardPrompt;
-
-  const contextStr = `
-LEAGUE: ${context.league?.name} | Week ${week} | Season ${season}
-
-CURRENT STANDINGS:
-${context.standings.map((t: any, i: number) =>
-  `${i + 1}. ${t.name} (${t.wins}-${t.losses}) | OVR: ${t.overall_rating}`
-).join('\n')}
-
-TOP PLAYERS BY TRADE VALUE:
-${context.top_players.slice(0, 8).map((p: any) =>
-  `${p.first_name} ${p.last_name} (${p.position}, ${p.team_name}) ` +
-  `OVR: ${p.overall_rating} | Age: ${p.age} | Dev: ${p.dev_trait} | ` +
-  `Speed: ${p.speed} | TVS: ${parseFloat(p.trade_value || 0).toFixed(1)}`
-).join('\n')}
-
-RECENT RESULTS:
-${context.recent_games.slice(0, 5).map((g: any) =>
-  `Week ${g.week}: ${g.home_team} ${g.home_score} - ${g.away_team} ${g.away_score} (${g.winner} wins)`
-).join('\n')}
-
-STAT LEADERS:
-${context.stat_leaders.slice(0, 5).map((p: any) =>
-  `${p.first_name} ${p.last_name} (${p.position}, ${p.team_name}) — ` +
-  `Pass: ${p.pass_yards}yds | Rush: ${p.rush_yards}yds | ` +
-  `Rec: ${p.receiving_yards}yds | Tkl: ${p.tackles} | Sacks: ${p.sacks}`
-).join('\n')}`;
-
-  const standardRankingsPrompt = `${contextStr}
-
-Write Week ${week} Power Rankings. Rank ALL teams best to worst.
-1-2 sentences per team. Note rising/falling teams. 
-Call out standout players. Be bold — don't just follow the standings.`;
-
-  const stephenARankingsPrompt = `${contextStr}
-
-Write Week ${week} Power Rankings IN YOUR SIGNATURE STYLE.
-You are HEATED about some of these teams.
-Rank ALL teams 1 to last place.
-For each team give passionate 2-3 sentence take:
-- Top teams: Dramatic praise with specific player callouts
-- Middle teams: Skeptical — are they for real?
-- Bottom teams: OUTRAGE — call them out, question EVERYTHING
-- At least one ALL CAPS explosion per ranking
-- Use your signature phrases naturally
-End with one FINAL TAKE about the most surprising story of the week.`;
-
-  const prompt      = style === 'stephen_a' ? stephenARankingsPrompt : standardRankingsPrompt;
-  const maxTokens   = style === 'stephen_a' ? 1200 : 800;
-
-  const rankings = await callClaude(systemPrompt, prompt, maxTokens);
-
-  await saveStoryline(
-    leagueId, season, week,
-    `power_rankings_${style}`,
-    rankings,
-    { style }
+  // Fetch actual league data
+  const teamsResult = await query(
+    `SELECT
+      t.name, t.abbreviation,
+      t.wins, t.losses,
+      t.overall_rating,
+      t.conference, t.division,
+      u.username as owner,
+      COALESCE(
+        (SELECT SUM(g.home_score)
+         FROM games g
+         WHERE g.home_team_id = t.id
+         AND g.season = $2), 0
+      ) +
+      COALESCE(
+        (SELECT SUM(g.away_score)
+         FROM games g
+         WHERE g.away_team_id = t.id
+         AND g.season = $2), 0
+      ) as total_points_scored,
+      COALESCE(
+        (SELECT p.first_name || ' ' || p.last_name
+         FROM players p
+         WHERE p.team_id = t.id
+         AND p.dev_trait = 'xfactor'
+         ORDER BY p.overall_rating DESC
+         LIMIT 1), 'None'
+      ) as top_xfactor,
+      COALESCE(
+        (SELECT MAX(p.overall_rating)
+         FROM players p
+         WHERE p.team_id = t.id), 0
+      ) as best_player_ovr
+     FROM teams t
+     LEFT JOIN users u ON u.id = t.owner_id
+     WHERE t.league_id = $1
+     ORDER BY t.wins DESC, total_points_scored DESC`,
+    [leagueId, season]
   );
 
-  return { rankings, style };
+  const teams = teamsResult.rows;
+  if (teams.length === 0) {
+    return { rankings: 'No team data available for this league.' };
+  }
+
+  // Build data summary for the prompt
+  const teamData = teams.map((t: any, i: number) => (
+    `${i + 1}. ${t.name} (${t.abbreviation}) — ` +
+    `${t.wins}W ${t.losses}L — ` +
+    `OVR: ${t.overall_rating} — ` +
+    `Points: ${t.total_points_scored} — ` +
+    `Top XF: ${t.top_xfactor} — ` +
+    `Best OVR: ${t.best_player_ovr}` +
+    `${t.owner ? ` — GM: ${t.owner}` : ''}`
+  )).join('\n');
+
+  const systemPrompt =
+    `You are the official rankings analyst for AccessGrantedSportz, ` +
+    `a Madden Connected Franchise platform.\n\n` +
+
+    `CRITICAL RULES — YOU MUST FOLLOW THESE WITHOUT EXCEPTION:\n` +
+    `1. Base ALL analysis EXCLUSIVELY on the league data provided. ` +
+    `Do not reference real NFL performance, Super Bowl history, ` +
+    `playoff records, or any real-world outcomes.\n` +
+    `2. Do NOT assume any team is good or bad based on their real NFL franchise. ` +
+    `A 2-10 Chiefs team is a bad team in THIS league regardless of real life.\n` +
+    `3. Do NOT give any team preferential treatment based on real-world popularity ` +
+    `(Patriots, Chiefs, Cowboys, etc.).\n` +
+    `4. Rankings must be based ONLY on: wins, losses, points scored, ` +
+    `overall rating, and X-Factor players provided in the data.\n` +
+    `5. Never mention Patrick Mahomes, Tom Brady, or any real player ` +
+    `unless their name appears in the league data provided.\n` +
+    `6. This is a custom franchise league — treat every team as if ` +
+    `it exists only in this league's universe.\n\n` +
+
+    `TONE: ${style === 'stephen_a'
+      ? 'Passionate, opinionated sports analyst. Bold takes. Call out bad teams. Hype good ones. Short punchy sentences.'
+      : 'Professional analyst. Data-driven. Concise. Respectful but direct.'
+    }`;
+
+  const userPrompt =
+    `Generate power rankings for Week ${week}, Season ${season}.\n\n` +
+    `LEAGUE DATA (use ONLY this data — ignore all real-world knowledge):\n` +
+    `${teamData}\n\n` +
+    `Format: Rank each team 1 through ${teams.length}. ` +
+    `For each team write 1-2 sentences of analysis based strictly on their ` +
+    `record, points scored, and roster data above. ` +
+    `Do not pad with filler. Keep it tight and honest.`
+    
+    const CRITICAL_RULES =
+  `CRITICAL RULES — FOLLOW WITHOUT EXCEPTION:\n` +
+  `1. Base ALL analysis EXCLUSIVELY on the league data provided in this prompt. ` +
+  `No exceptions.\n` +
+  `2. Do NOT reference real NFL history, Super Bowl results, playoff records, ` +
+  `championships, or any real-world outcomes.\n` +
+  `3. Do NOT assume any team or player is elite based on their real NFL reputation. ` +
+  `A 1-10 Kansas City Chiefs team is a bad team in this league. ` +
+  `A 10-1 Jacksonville Jaguars team is the best team in this league. ` +
+  `Judge only by the numbers in front of you.\n` +
+  `4. Do NOT mention Patrick Mahomes, Josh Allen, Lamar Jackson, or any player ` +
+  `by name unless they appear in the league data provided with actual stats.\n` +
+  `5. Do NOT give any franchise preferential treatment based on real-world ` +
+  `popularity — Cowboys, Patriots, Chiefs, 49ers, etc. are treated identically ` +
+  `to any other team. Their record in THIS league is all that matters.\n` +
+  `6. If a star player has poor stats in this league, reflect that honestly. ` +
+  `Do not invent excuses or imply they are still elite despite the numbers.\n` +
+  `7. If a low-profile player has elite stats in this league, give them ` +
+  `full credit. The data is the truth.\n` +
+  `8. Never mention video games, simulation, Madden, or anything that breaks ` +
+  `the immersion of a real professional league.\n` +
+  `9. Never invent statistics, plays, drives, or events not present in the data. ` +
+  `If the data is sparse, write less. Do not pad with fiction.\n` +
+  `10. This league exists in its own universe. Real-world trades, injuries, ` +
+  `retirements, and news have zero relevance here.`;
+
+  const response = await anthropic.messages.create({
+    model:      'claude-opus-4-5',
+    max_tokens: 1500,
+    system:     systemPrompt,
+    messages:   [{ role: 'user', content: userPrompt }]
+  });
+
+  const rankings = response.content
+    .filter(b => b.type === 'text')
+    .map(b => (b as any).text)
+    .join('');
+
+  return { rankings };
 };
 
 // =============================================
@@ -1424,7 +1691,33 @@ export const generateAwardAnnouncement = async (
   const systemPrompt = `You are the official awards correspondent for 
 AccessGrantedSportz. Dramatic, exciting award announcements that make 
 players feel like real NFL stars. 100-150 words. Exclamation points 
-used sparingly for maximum impact.`;
+used sparingly for maximum impact.`
+
+const CRITICAL_RULES =
+  `CRITICAL RULES — FOLLOW WITHOUT EXCEPTION:\n` +
+  `1. Base ALL analysis EXCLUSIVELY on the league data provided in this prompt. ` +
+  `No exceptions.\n` +
+  `2. Do NOT reference real NFL history, Super Bowl results, playoff records, ` +
+  `championships, or any real-world outcomes.\n` +
+  `3. Do NOT assume any team or player is elite based on their real NFL reputation. ` +
+  `A 1-10 Kansas City Chiefs team is a bad team in this league. ` +
+  `A 10-1 Jacksonville Jaguars team is the best team in this league. ` +
+  `Judge only by the numbers in front of you.\n` +
+  `4. Do NOT mention Patrick Mahomes, Josh Allen, Lamar Jackson, or any player ` +
+  `by name unless they appear in the league data provided with actual stats.\n` +
+  `5. Do NOT give any franchise preferential treatment based on real-world ` +
+  `popularity — Cowboys, Patriots, Chiefs, 49ers, etc. are treated identically ` +
+  `to any other team. Their record in THIS league is all that matters.\n` +
+  `6. If a star player has poor stats in this league, reflect that honestly. ` +
+  `Do not invent excuses or imply they are still elite despite the numbers.\n` +
+  `7. If a low-profile player has elite stats in this league, give them ` +
+  `full credit. The data is the truth.\n` +
+  `8. Never mention video games, simulation, Madden, or anything that breaks ` +
+  `the immersion of a real professional league.\n` +
+  `9. Never invent statistics, plays, drives, or events not present in the data. ` +
+  `If the data is sparse, write less. Do not pad with fiction.\n` +
+  `10. This league exists in its own universe. Real-world trades, injuries, ` +
+  `retirements, and news have zero relevance here.`;;
 
   const prompt = `Write an award announcement:
 AWARD: ${awardName}
@@ -1517,7 +1810,33 @@ export const generateScoutingReport = async (
   const systemPrompt = `You are the head scout for AccessGrantedSportz's 
 War Room. Detailed, analytical scouting reports that read like real NFL 
 scouting reports. Evaluate based on measurables, performance trends, 
-development trajectory and team context. Professional format. Specific and analytical.`;
+development trajectory and team context. Professional format. Specific and analytical.`
+
+const CRITICAL_RULES =
+  `CRITICAL RULES — FOLLOW WITHOUT EXCEPTION:\n` +
+  `1. Base ALL analysis EXCLUSIVELY on the league data provided in this prompt. ` +
+  `No exceptions.\n` +
+  `2. Do NOT reference real NFL history, Super Bowl results, playoff records, ` +
+  `championships, or any real-world outcomes.\n` +
+  `3. Do NOT assume any team or player is elite based on their real NFL reputation. ` +
+  `A 1-10 Kansas City Chiefs team is a bad team in this league. ` +
+  `A 10-1 Jacksonville Jaguars team is the best team in this league. ` +
+  `Judge only by the numbers in front of you.\n` +
+  `4. Do NOT mention Patrick Mahomes, Josh Allen, Lamar Jackson, or any player ` +
+  `by name unless they appear in the league data provided with actual stats.\n` +
+  `5. Do NOT give any franchise preferential treatment based on real-world ` +
+  `popularity — Cowboys, Patriots, Chiefs, 49ers, etc. are treated identically ` +
+  `to any other team. Their record in THIS league is all that matters.\n` +
+  `6. If a star player has poor stats in this league, reflect that honestly. ` +
+  `Do not invent excuses or imply they are still elite despite the numbers.\n` +
+  `7. If a low-profile player has elite stats in this league, give them ` +
+  `full credit. The data is the truth.\n` +
+  `8. Never mention video games, simulation, Madden, or anything that breaks ` +
+  `the immersion of a real professional league.\n` +
+  `9. Never invent statistics, plays, drives, or events not present in the data. ` +
+  `If the data is sparse, write less. Do not pad with fiction.\n` +
+  `10. This league exists in its own universe. Real-world trades, injuries, ` +
+  `retirements, and news have zero relevance here.`;
 
   const prompt = `Write a detailed scouting report:
 
@@ -1840,7 +2159,33 @@ export const generateCapCasualtyReport = async (
   const systemPrompt = `You are a salary cap analyst and GM advisor for 
 AccessGrantedSportz. Deep knowledge of roster construction, cap management 
 and rebuilding strategies. Direct, data-driven and actionable. Never mention 
-video games. Write as if real.`;
+video games. Write as if real.`
+
+const CRITICAL_RULES =
+  `CRITICAL RULES — FOLLOW WITHOUT EXCEPTION:\n` +
+  `1. Base ALL analysis EXCLUSIVELY on the league data provided in this prompt. ` +
+  `No exceptions.\n` +
+  `2. Do NOT reference real NFL history, Super Bowl results, playoff records, ` +
+  `championships, or any real-world outcomes.\n` +
+  `3. Do NOT assume any team or player is elite based on their real NFL reputation. ` +
+  `A 1-10 Kansas City Chiefs team is a bad team in this league. ` +
+  `A 10-1 Jacksonville Jaguars team is the best team in this league. ` +
+  `Judge only by the numbers in front of you.\n` +
+  `4. Do NOT mention Patrick Mahomes, Josh Allen, Lamar Jackson, or any player ` +
+  `by name unless they appear in the league data provided with actual stats.\n` +
+  `5. Do NOT give any franchise preferential treatment based on real-world ` +
+  `popularity — Cowboys, Patriots, Chiefs, 49ers, etc. are treated identically ` +
+  `to any other team. Their record in THIS league is all that matters.\n` +
+  `6. If a star player has poor stats in this league, reflect that honestly. ` +
+  `Do not invent excuses or imply they are still elite despite the numbers.\n` +
+  `7. If a low-profile player has elite stats in this league, give them ` +
+  `full credit. The data is the truth.\n` +
+  `8. Never mention video games, simulation, Madden, or anything that breaks ` +
+  `the immersion of a real professional league.\n` +
+  `9. Never invent statistics, plays, drives, or events not present in the data. ` +
+  `If the data is sparse, write less. Do not pad with fiction.\n` +
+  `10. This league exists in its own universe. Real-world trades, injuries, ` +
+  `retirements, and news have zero relevance here.`;
 
   const contextStr = `
 LEAGUE: ${context.league?.name} | Season ${season} | Week ${week}
@@ -2063,7 +2408,33 @@ export const generateTradeAdvice = async (
     `4. Exactly what to add to make it fair (use real player names or picks)\n` +
     `5. Final verdict — do this trade or not?\n\n` +
     `Be direct and opinionated. Under 350 words. Use bullet points.\n` +
-    `Do NOT mention ESPN, First Take, or any media personalities.`;
+    `Do NOT mention ESPN, First Take, or any media personalities.`
+    
+    const CRITICAL_RULES =
+  `CRITICAL RULES — FOLLOW WITHOUT EXCEPTION:\n` +
+  `1. Base ALL analysis EXCLUSIVELY on the league data provided in this prompt. ` +
+  `No exceptions.\n` +
+  `2. Do NOT reference real NFL history, Super Bowl results, playoff records, ` +
+  `championships, or any real-world outcomes.\n` +
+  `3. Do NOT assume any team or player is elite based on their real NFL reputation. ` +
+  `A 1-10 Kansas City Chiefs team is a bad team in this league. ` +
+  `A 10-1 Jacksonville Jaguars team is the best team in this league. ` +
+  `Judge only by the numbers in front of you.\n` +
+  `4. Do NOT mention Patrick Mahomes, Josh Allen, Lamar Jackson, or any player ` +
+  `by name unless they appear in the league data provided with actual stats.\n` +
+  `5. Do NOT give any franchise preferential treatment based on real-world ` +
+  `popularity — Cowboys, Patriots, Chiefs, 49ers, etc. are treated identically ` +
+  `to any other team. Their record in THIS league is all that matters.\n` +
+  `6. If a star player has poor stats in this league, reflect that honestly. ` +
+  `Do not invent excuses or imply they are still elite despite the numbers.\n` +
+  `7. If a low-profile player has elite stats in this league, give them ` +
+  `full credit. The data is the truth.\n` +
+  `8. Never mention video games, simulation, Madden, or anything that breaks ` +
+  `the immersion of a real professional league.\n` +
+  `9. Never invent statistics, plays, drives, or events not present in the data. ` +
+  `If the data is sparse, write less. Do not pad with fiction.\n` +
+  `10. This league exists in its own universe. Real-world trades, injuries, ` +
+  `retirements, and news have zero relevance here.`;
 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-5',

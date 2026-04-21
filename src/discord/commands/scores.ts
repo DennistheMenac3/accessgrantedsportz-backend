@@ -114,14 +114,14 @@ export const execute = async (
       const showTags = awayTag && homeTag && awayTag !== homeTag;
 
       const score =
-        `${awayWon ? '🏆 ' : ''}**${game.away_abbr}** ` +
+        `${awayWon ? 'Winner ' : ''}**${game.away_abbr}** ` +
         `(${game.away_wins}-${game.away_losses}) ` +
         `**${game.away_score}** - ` +
         `**${game.home_score}** ` +
         `**${game.home_abbr}** ` +
         `(${game.home_wins}-${game.home_losses})` +
-        `${homeWon ? ' 🏆' : ''}` +
-        `${tie ? ' 🤝' : ''}`;
+        `${homeWon ? ' Winner' : ''}` +
+        `${tie ? ' Two Losers' : ''}`;
 
       const owners = showTags
         ? `\n${awayTag} vs ${homeTag}`
