@@ -183,6 +183,9 @@ export const ingestPlayers = async (
       const isOnPracticeSquad =
         player.isOnPracticeSquad === true ||
         player.practiceSquad    === true;
+      // If the EA payload gives you a direct link or ID, you define it here.
+// (You may need to change 'portraitId' to whatever EA actually calls it in their JSON)
+      const portraitUrl = player.portraitId ? `https://media.easports.com/madden/portraits/${player.portraitId}.png` : null;
 
       const upsertResult = await query(
         `INSERT INTO players (
@@ -218,7 +221,7 @@ export const ingestPlayers = async (
           overall, age, speed,
           devTrait, yearsPro,
           contractSalary, contractYears,
-          isFreeAgent, isOnPracticeSquad
+          isFreeAgent, isOnPracticeSquad, portraitUrl
         ]
       );
 

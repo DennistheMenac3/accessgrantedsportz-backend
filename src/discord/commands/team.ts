@@ -160,15 +160,16 @@ export const buildTeamButtons = (teamId: string, page: number, totalPages: numbe
 
     row.addComponents(
         new ButtonBuilder()
-            .setCustomId(`teamview_${teamId}_${Math.max(1, page - 1)}`)
+            // Give it a dummy ID on page 0 so it doesn't collide with the Next button
+            .setCustomId(page === 0 ? `teamview_${teamId}_prev_dead` : `teamview_${teamId}_${page - 1}`)
             .setLabel('◀ Prev')
             .setStyle(ButtonStyle.Primary)
-            .setDisabled(page <= 1),
+            .setDisabled(page <= 1), // Disabled on Page 0 and Page 1
         new ButtonBuilder()
-            .setCustomId(`teamview_${teamId}_${page === 0 ? 1 : page + 1}`)
+            .setCustomId(`teamview_${teamId}_${page + 1}`)
             .setLabel(page === 0 ? 'View Full Roster ▶' : 'Next ▶')
             .setStyle(ButtonStyle.Primary)
-            .setDisabled(page >= totalPages)
+            .setDisabled(page >= totalPages || totalPages === 0)
     );
 
     return row;
