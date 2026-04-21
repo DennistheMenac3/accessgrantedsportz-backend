@@ -33,7 +33,9 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
-  // Handle autocomplete
+  // =============================================
+  // 1. HANDLE AUTOCOMPLETE
+  // =============================================
   if (interaction.isAutocomplete()) {
     const command = commands.get(interaction.commandName);
     if (command?.autocomplete) {
@@ -46,6 +48,68 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     return;
   }
 
+  // =============================================
+  // 2. HANDLE BUTTON CLICKS (Trades & Pagination)
+  // =============================================
+  if (interaction.isButton()) {
+    try {
+      // --- TEAM ROSTER PAGINATION ---
+      if (interaction.customId.startsWith('teamroster_')) {
+        const [, teamId, pageStr] = interaction.customId.split('_');
+        const targetPage = parseInt(pageStr, 10);
+
+        const teamRes = await query(`SELECT id, name, city, abbreviation FROM teams WHERE id = $1`, [teamId]);
+        const rosterRes = await query(
+          `SELECT p.first_name, p.last_name, p.position, p.overall_rating, p.age, p.speed, tvh.total_value 
+           FROM players p LEFT JOIN trade_value_history tvh ON p.id = tvh.player_id
+           WHERE p.team_id = $1 ORDER BY p.overall_rating DESC`,
+          [teamId]
+        );
+
+        if (teamRes.rows.length === 0 || rosterRes.rows.length === 0) {
+          return interaction.update({ content: '❌ Data expired or not found.', components: [], embeds: [] });
+        }
+
+        const players = rosterRes.rows;
+        const totalPages = Math.ceil(players.length / 10);
+
+        const { buildRosterEmbed, buildPaginationButtons } = require('./commands/team');
+        const newEmbed = buildRosterEmbed(teamRes.rows[0], players, targetPage, totalPages);
+        const newButtons = buildPaginationButtons(teamId, targetPage, totalPages);
+
+        await interaction.update({ embeds: [newEmbed], components: [newButtons] });
+        return;
+      }
+
+      // --- TRADE APPROVAL ENGINE ---
+      const [action, type, tradeId] = interaction.customId.split('_');
+      if (type === 'trade') {
+        // Check for Commissioner permissions
+        const member = interaction.member as any;
+        const isCommish = member?.roles?.cache?.some((r: any) => r.name.toLowerCase() === 'commissioner');
+
+        if (!isCommish) {
+          return interaction.reply({ content: "🚫 Only the Commissioner can approve/deny trades.", ephemeral: true });
+        }
+
+        if (action === 'approve') {
+          await query(`UPDATE trades SET status = 'approved' WHERE id = $1`, [tradeId]);
+          await interaction.update({ content: '✅ **Trade Approved.**', components: [] });
+        } else if (action === 'deny') {
+          await query(`UPDATE trades SET status = 'denied' WHERE id = $1`, [tradeId]);
+          await interaction.update({ content: '❌ **Trade Denied.**', components: [] });
+        }
+        return;
+      }
+    } catch (error) {
+      console.error('Button interaction error:', error);
+    }
+    return;
+  }
+
+  // =============================================
+  // 3. HANDLE SLASH COMMANDS
+  // =============================================
   if (!interaction.isChatInputCommand()) return;
 
   const command = commands.get(interaction.commandName);
@@ -74,6 +138,9 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
   }
 });
 
+// =============================================
+// UTILITY FUNCTIONS
+// =============================================
 export const postToChannel = async (
   channelId: string,
   content:   string
