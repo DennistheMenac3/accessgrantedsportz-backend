@@ -18,8 +18,10 @@ export const data = new SlashCommandBuilder()
     );
 
 export const execute = async (interaction: ChatInputCommandInteraction) => {
-    // 1. Fluid Search Preparation
-    // We remove exact matching and allow the DB to find partials
+    // 1. BUY TIME! Tell Discord we are thinking...
+    await interaction.deferReply();
+
+    // 2. Fluid Search Preparation
     const searchParam = interaction.options.getString('name')?.trim().toLowerCase();
 
     const teamRes = await query(
@@ -33,12 +35,12 @@ export const execute = async (interaction: ChatInputCommandInteraction) => {
     );
 
     if (teamRes.rows.length === 0) {
-        return interaction.reply({ content: `❌ Could not find a team matching **"${searchParam}"**. Try a different abbreviation or city name.`, ephemeral: true });
+        return interaction.editReply({ content: `❌ Could not find a team matching **"${searchParam}"**. Try a different abbreviation or city name.` });
     }
 
     const team = teamRes.rows[0];
 
-    // 2. Fetch the Full Roster with TVS
+    // 3. Fetch the Full Roster with TVS
     const rosterRes = await query(
         `SELECT p.first_name, p.last_name, p.position, p.overall_rating, p.age, p.speed, tvh.total_value 
          FROM players p
@@ -50,7 +52,7 @@ export const execute = async (interaction: ChatInputCommandInteraction) => {
 
     const players = rosterRes.rows;
 
-    // 3. Fetch Season Stats / Games
+    // 4. Fetch Season Stats / Games
     const gamesRes = await query(
         `SELECT home_team_id, away_team_id, home_score, away_score 
          FROM games WHERE home_team_id = $1 OR away_team_id = $1`,
@@ -79,7 +81,8 @@ export const execute = async (interaction: ChatInputCommandInteraction) => {
     const embed = buildTeamDashboardEmbed(team, players, wins, losses, ties, pointsFor, pointsAgainst, totalTVS);
     const buttons = buildTeamButtons(team.id, currentPage, totalRosterPages);
 
-    await interaction.reply({ embeds: [embed], components: [buttons] });
+    // Make sure to use editReply here!
+    await interaction.editReply({ embeds: [embed], components: [buttons] });
 };
 
 // =============================================

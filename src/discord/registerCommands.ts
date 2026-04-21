@@ -19,6 +19,7 @@ import { data as joinData }       from './commands/join';
 import { data as claimData }      from './commands/claim';
 import { data as tradeData }      from './commands/trade';
 import { data as playerData }     from './commands/player';
+import { data as teamData }       from './commands/team'; // <-- ADDED THIS
 
 const commands = [
   rankingsData.toJSON(),
@@ -38,6 +39,7 @@ const commands = [
   claimData.toJSON(),
   tradeData.toJSON(),
   playerData.toJSON(),
+  teamData.toJSON(), // <-- ADDED THIS
 ];
 
 const rest = new REST().setToken(process.env.DISCORD_BOT_TOKEN!);
@@ -49,7 +51,7 @@ const registerCommands = async () => {
     await rest.put(
       Routes.applicationGuildCommands(
         process.env.DISCORD_CLIENT_ID!,
-        '1261350703645982720'
+        '1261350703645982720' // Your hardcoded Server ID
       ),
       { body: commands }
     );

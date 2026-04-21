@@ -47,10 +47,15 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
   if (interaction.isButton()) {
     try {
+      // --- TEAM DASHBOARD & ROSTER PAGINATION ---
       if (interaction.customId.startsWith('teamview_')) {
+        // 1. TELL DISCORD WE ARE THINKING (Prevents 3-second timeout)
+        await interaction.deferUpdate();
+
         const [, teamId, pageStr] = interaction.customId.split('_');
         const targetPage = parseInt(pageStr, 10);
-
+        
+        // 2. RUN THE DB QUERIES
         const teamRes = await query(
           `SELECT id, name, city, abbreviation, overall_rating, team_logo_url FROM teams WHERE id = $1`, 
           [teamId]
@@ -63,7 +68,9 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         );
 
         if (teamRes.rows.length === 0 || rosterRes.rows.length === 0) {
-          return interaction.update({ content: '❌ Data expired or not found.', components: [], embeds: [] });
+          // Use editReply because we already deferred
+          await interaction.editReply({ content: '❌ Data expired or not found.', components: [], embeds: [] });
+          return;
         }
 
         const team = teamRes.rows[0];
@@ -92,10 +99,13 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         }
 
         const newButtons = buildTeamButtons(teamId, targetPage, totalPages);
-        await interaction.update({ embeds: [newEmbed], components: [newButtons] });
+        
+        // 3. EDIT THE REPLY WITH THE NEW PAGE
+        await interaction.editReply({ embeds: [newEmbed], components: [newButtons] });
         return;
       }
 
+      // --- TRADE APPROVAL ENGINE ---
       const [action, type, tradeId] = interaction.customId.split('_');
       if (type === 'trade') {
         const member = interaction.member as any;
