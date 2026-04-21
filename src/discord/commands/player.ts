@@ -1,10 +1,14 @@
 import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
-  AutocompleteInteraction
+  AutocompleteInteraction,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ComponentType
 } from 'discord.js';
 import { query } from '../../config/database';
-import { COLORS, createEmbed } from '../../config/brand';
+import { COLORS, createEmbed, getDevTraitIcon, getDevTraitLabel } from '../../config/brand';
 
 // =============================================
 // POSITION GROUP MAPPINGS
@@ -148,12 +152,13 @@ export const execute = async (
     if (nameInput && nameInput.length === 36 && nameInput.includes('-')) {
       const result = await query(
         `SELECT p.*,
-          t.name         as team_name,
-          t.abbreviation as team_abbr,
-          t.wins, t.losses,
-          COALESCE(tvh.total_value, 0) as trade_value,
-          tvh.value_breakdown
-         FROM players p
+  p.portrait_url,
+  t.name         as team_name,
+  t.abbreviation as team_abbr,
+  t.wins, t.losses,
+  COALESCE(tvh.total_value, 0) as trade_value,
+  tvh.value_breakdown
+FROM players p
          LEFT JOIN teams t ON t.id = p.team_id
          LEFT JOIN trade_value_history tvh
            ON tvh.player_id  = p.id
@@ -288,10 +293,8 @@ const sendPlayerCard = async (
   const tradeValue = parseFloat(player.trade_value || '0');
   const breakdown  = player.value_breakdown || {};
 
-  const devLabel =
-    player.dev_trait === 'xfactor'   ? '⚡ XFactor'  :
-    player.dev_trait === 'superstar' ? '⭐ Superstar' :
-    player.dev_trait === 'star'      ? '🌟 Star'      : '📋 Normal';
+  const devIcon  = getDevTraitIcon(player.dev_trait);
+  const devLabel = getDevTraitLabel(player.dev_trait);
 
   const valueColor =
     tradeValue >= 200 ? COLORS.GOLD   :
@@ -309,7 +312,9 @@ const sendPlayerCard = async (
     .setTitle(`${player.first_name} ${player.last_name} | ${player.position}`)
     .setDescription(
       `${player.team_name || 'Free Agent'} ` +
-      `${player.team_abbr ? `(${player.wins || 0}-${player.losses || 0})` : ''} | ` +
+      `${player.team_abbr
+        ? `(${player.wins || 0}-${player.losses || 0})`
+        : ''} | ` +
       `${devLabel} | ${valueTier}`
     )
     .addFields(
@@ -329,16 +334,26 @@ const sendPlayerCard = async (
       }
     );
 
+  // Player portrait — large image
+  if (player.portrait_url) {
+    embed.setImage(player.portrait_url);
+  }
+
+  // Dev trait icon — thumbnail
+  if (devIcon) {
+    embed.setThumbnail(devIcon);
+  }
+
   if (breakdown && Object.keys(breakdown).length > 0) {
     embed.addFields({
       name:   '📈 Value Breakdown',
       value:
-        `Base: **${breakdown.base_value      || 0}** | ` +
-        `Speed: **${breakdown.speed_bonus    || 0}** | ` +
+        `Base: **${breakdown.base_value         || 0}** | ` +
+        `Speed: **${breakdown.speed_bonus       || 0}** | ` +
         `Dev: **${breakdown.dev_trait_age_bonus || 0}**\n` +
-        `Age ×${breakdown.age_multiplier      || 1} | ` +
-        `Pos ×${breakdown.position_multiplier || 1} | ` +
-        `Dev ×${breakdown.dev_trait_multiplier || 1}`,
+        `Age ×${breakdown.age_multiplier        || 1} | ` +
+        `Pos ×${breakdown.position_multiplier   || 1} | ` +
+        `Dev ×${breakdown.dev_trait_multiplier  || 1}`,
       inline: false
     });
   }
@@ -348,7 +363,7 @@ const sendPlayerCard = async (
       name:   '📋 Contract',
       value:
         `Salary: $${(player.contract_salary / 1000000).toFixed(2)}M\n` +
-        `Years: ${player.contract_years || '?'}`,
+        `Years:  ${player.contract_years || '?'}`,
       inline: true
     });
   }

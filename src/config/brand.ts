@@ -23,6 +23,29 @@ export const COLORS = {
   HIGHWAY_ROBBERY:0x8b0000
 };
 
+export const DEV_TRAIT_ICONS: { [key: string]: string } = {
+  xfactor:   'https://accessgrantedsportz.com/dev_xfactor.png',
+  superstar: 'https://accessgrantedsportz.com/dev_superstar.png',
+  star:      'https://accessgrantedsportz.com/dev_star.png',
+  normal:    'https://accessgrantedsportz.com/dev_normal.png',
+  hidden:    'https://accessgrantedsportz.com/dev_hidden.png'
+};
+
+export const getDevTraitIcon = (trait: string): string => {
+  return DEV_TRAIT_ICONS[trait?.toLowerCase()] || DEV_TRAIT_ICONS.normal;
+};
+
+export const getDevTraitLabel = (trait: string): string => {
+  const labels: { [key: string]: string } = {
+    xfactor:   'X-Factor',
+    superstar: 'Superstar',
+    star:      'Star',
+    normal:    'Normal',
+    hidden:    'Hidden'
+  };
+  return labels[trait?.toLowerCase()] || 'Normal';
+};
+
 export const FOOTER = {
   text:    'AccessGrantedSportz | Access Granted. Game On.',
   iconURL: 'https://i.imgur.com/placeholder.png' // Replace with your logo URL
