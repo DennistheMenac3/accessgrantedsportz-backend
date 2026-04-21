@@ -7,6 +7,7 @@ import {
   TextChannel
 } from 'discord.js';
 import { query } from '../config/database';
+import { buildTeamDashboardEmbed, buildRosterEmbed, buildTeamButtons } from './commands/team';
 
 export const client = new Client({
   intents: [
@@ -22,7 +23,6 @@ client.once(Events.ClientReady, async (readyClient) => {
   console.log(`🤖 Discord bot logged in as ${readyClient.user.tag}`);
   console.log(`📡 Bot is in ${readyClient.guilds.cache.size} servers`);
 
-  // Pre-warm database connection so first command is fast
   try {
     await query('SELECT 1');
     console.log('✅ Discord bot database connection ready');
@@ -33,9 +33,6 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
-  // =============================================
-  // 1. HANDLE AUTOCOMPLETE
-  // =============================================
   if (interaction.isAutocomplete()) {
     const command = commands.get(interaction.commandName);
     if (command?.autocomplete) {
@@ -48,13 +45,9 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     return;
   }
 
-  // =============================================
-  // 2. HANDLE BUTTON CLICKS (Trades & Pagination)
-  // =============================================
   if (interaction.isButton()) {
     try {
-      // --- TEAM ROSTER PAGINATION ---
-      if (interaction.customId.startsWith('teamroster_')) {
+      if (interaction.customId.startsWith('teamview_')) {
         const [, teamId, pageStr] = interaction.customId.split('_');
         const targetPage = parseInt(pageStr, 10);
 
@@ -73,21 +66,38 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
           return interaction.update({ content: '❌ Data expired or not found.', components: [], embeds: [] });
         }
 
+        const team = teamRes.rows[0];
         const players = rosterRes.rows;
         const totalPages = Math.ceil(players.length / 10);
 
-        const { buildRosterEmbed, buildPaginationButtons } = require('./commands/team');
-        const newEmbed = buildRosterEmbed(teamRes.rows[0], players, targetPage, totalPages);
-        const newButtons = buildPaginationButtons(teamId, targetPage, totalPages);
+        let newEmbed;
+        if (targetPage === 0) {
+            const gamesRes = await query(
+                `SELECT home_team_id, away_team_id, home_score, away_score FROM games WHERE home_team_id = $1 OR away_team_id = $1`,
+                [team.id]
+            );
+            let w = 0, l = 0, t = 0, pf = 0, pa = 0;
+            gamesRes.rows.forEach(game => {
+                const isHome = game.home_team_id === team.id;
+                const ptFor = isHome ? game.home_score : game.away_score;
+                const ptAgn = isHome ? game.away_score : game.home_score;
+                pf += ptFor; pa += ptAgn;
+                if (ptFor > ptAgn) w++; else if (ptFor < ptAgn) l++; else t++;
+            });
+            const totalTVS = players.reduce((sum: number, p: any) => sum + (parseFloat(p.total_value) || 0), 0);
+            
+            newEmbed = buildTeamDashboardEmbed(team, players, w, l, t, pf, pa, totalTVS);
+        } else {
+            newEmbed = buildRosterEmbed(team, players, targetPage, totalPages);
+        }
 
+        const newButtons = buildTeamButtons(teamId, targetPage, totalPages);
         await interaction.update({ embeds: [newEmbed], components: [newButtons] });
         return;
       }
 
-      // --- TRADE APPROVAL ENGINE ---
       const [action, type, tradeId] = interaction.customId.split('_');
       if (type === 'trade') {
-        // Check for Commissioner permissions
         const member = interaction.member as any;
         const isCommish = member?.roles?.cache?.some((r: any) => r.name.toLowerCase() === 'commissioner');
 
@@ -110,24 +120,17 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     return;
   }
 
-  // =============================================
-  // 3. HANDLE SLASH COMMANDS
-  // =============================================
   if (!interaction.isChatInputCommand()) return;
 
   const command = commands.get(interaction.commandName);
 
-  if (!command) {
-    console.error(`No command matching ${interaction.commandName} was found.`);
-    return;
-  }
+  if (!command) return;
 
   try {
     await command.execute(interaction);
   } catch (error: any) {
     console.error(`Error executing ${interaction.commandName}:`, error);
-    if (error.code === 10062) return;
-    if (error.code === 40060) return;
+    if (error.code === 10062 || error.code === 40060) return;
     try {
       const msg = '❌ There was an error executing this command.';
       if (interaction.replied || interaction.deferred) {
@@ -135,19 +138,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       } else {
         await interaction.reply({ content: msg, ephemeral: true });
       }
-    } catch {
-      // Silently ignore
-    }
+    } catch { }
   }
 });
 
-// =============================================
-// UTILITY FUNCTIONS
-// =============================================
-export const postToChannel = async (
-  channelId: string,
-  content:   string
-): Promise<void> => {
+export const postToChannel = async (channelId: string, content: string): Promise<void> => {
   try {
     const channel = await client.channels.fetch(channelId);
     if (channel && channel instanceof TextChannel) {
@@ -165,10 +160,7 @@ export const postToChannel = async (
   }
 };
 
-export const splitMessage = (
-  text:      string,
-  maxLength: number
-): string[] => {
+export const splitMessage = (text: string, maxLength: number): string[] => {
   const chunks: string[] = [];
   const lines   = text.split('\n');
   let current   = '';
@@ -181,7 +173,6 @@ export const splitMessage = (
       current += (current ? '\n' : '') + line;
     }
   }
-
   if (current) chunks.push(current.trim());
   return chunks;
 };

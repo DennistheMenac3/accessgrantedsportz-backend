@@ -27,80 +27,30 @@ import communityRoutes    from './routes/communityRoutes';
 import { startBot, commands } from './discord/bot';
 import { startScheduler }     from './services/schedulerService';
 
-// Import Discord Commands
-import { data as rankingsCmd,
-         execute as rankingsExec
-} from './discord/commands/rankings';
+// =============================================
+// DISCORD COMMAND IMPORTS
+// =============================================
+// Standard Commands
+import { data as rankingsCmd, execute as rankingsExec } from './discord/commands/rankings';
+import { data as rumorsCmd, execute as rumorsExec } from './discord/commands/rumors';
+import { data as standingsCmd, execute as standingsExec } from './discord/commands/standings';
+import { data as gemsCmd, execute as gemsExec } from './discord/commands/gems';
+import { data as leadersCmd, execute as leadersExec } from './discord/commands/leaders';
+import { data as awardsCmd, execute as awardsExec } from './discord/commands/awards';
+import { data as recapCmd, execute as recapExec } from './discord/commands/recap';
+import { data as inviteCmd, execute as inviteExec } from './discord/commands/invite';
+import { data as scoresCmd, execute as scoresExec } from './discord/commands/scores';
+import { data as joinCmd, execute as joinExec } from './discord/commands/join';
+import { data as claimCmd, execute as claimExec } from './discord/commands/claim';
+import { data as tradeCmd, execute as tradeExec } from './discord/commands/trade';
+import { data as teamCmd, execute as teamExec } from './discord/commands/team'; // Restored!
+import { data as valueCmd, execute as valueExec } from './discord/commands/value';
+import { data as compareCmd, execute as compareExec } from './discord/commands/compare';
+import { data as scoutCmd, execute as scoutExec } from './discord/commands/scout';
+import { data as tradecheckCmd, execute as tradecheckExec } from './discord/commands/tradecheck';
 
-import { data as rumorsCmd,
-         execute as rumorsExec
-} from './discord/commands/rumors';
-
-import { data as standingsCmd,
-         execute as standingsExec
-} from './discord/commands/standings';
-
-import { data as gemsCmd,
-         execute as gemsExec
-} from './discord/commands/gems';
-
-import { data as leadersCmd,
-         execute as leadersExec
-} from './discord/commands/leaders';
-
-import { data as awardsCmd,
-         execute as awardsExec
-} from './discord/commands/awards';
-
-import { data as recapCmd,
-         execute as recapExec
-} from './discord/commands/recap';
-
-import { data as inviteCmd,
-         execute as inviteExec
-} from './discord/commands/invite';
-
-import { data as scoresCmd,
-         execute as scoresExec
-} from './discord/commands/scores';
-
-import { data as joinCmd,
-         execute as joinExec
-} from './discord/commands/join';
-
-import { data as claimCmd,
-         execute as claimExec
-} from './discord/commands/claim';
-
-import { data as tradeCmd,
-         execute as tradeExec
-} from './discord/commands/trade';
-
-// Commands with autocomplete
-import { data as playerCmd,
-         execute as playerExec,
-         autocomplete as playerAutocomplete
-} from './discord/commands/player';
-
-import { data as valueCmd,
-         execute as valueExec,
-         autocomplete as valueAutocomplete
-} from './discord/commands/value';
-
-import { data as compareCmd,
-         execute as compareExec,
-         autocomplete as compareAutocomplete
-} from './discord/commands/compare';
-
-import { data as scoutCmd,
-         execute as scoutExec,
-         autocomplete as scoutAutocomplete
-} from './discord/commands/scout';
-
-import { data as tradecheckCmd,
-         execute as tradecheckExec,
-         autocomplete as tradecheckAutocomplete
-} from './discord/commands/tradecheck';
+// Commands with Autocomplete
+import { data as playerCmd, execute as playerExec, autocomplete as playerAutocomplete } from './discord/commands/player';
 
 const app: Application = express();
 const PORT = process.env.PORT || 3000;
@@ -164,27 +114,16 @@ commands.set(scoresCmd.name,    { execute: scoresExec    });
 commands.set(joinCmd.name,      { execute: joinExec      });
 commands.set(claimCmd.name,     { execute: claimExec     });
 commands.set(tradeCmd.name,     { execute: tradeExec     });
+commands.set(teamCmd.name,      { execute: teamExec      }); // Restored!
+commands.set(valueCmd.name,     { execute: valueExec     });
+commands.set(compareCmd.name,   { execute: compareExec   });
+commands.set(scoutCmd.name,     { execute: scoutExec     });
+commands.set(tradecheckCmd.name,{ execute: tradecheckExec});
 
 // Commands with autocomplete
 commands.set(playerCmd.name, {
   execute:      playerExec,
   autocomplete: playerAutocomplete
-});
-commands.set(valueCmd.name, {
-  execute:      valueExec,
-  autocomplete: valueAutocomplete
-});
-commands.set(compareCmd.name, {
-  execute:      compareExec,
-  autocomplete: compareAutocomplete
-});
-commands.set(scoutCmd.name, {
-  execute:      scoutExec,
-  autocomplete: scoutAutocomplete
-});
-commands.set(tradecheckCmd.name, {
-  execute:      tradecheckExec,
-  autocomplete: tradecheckAutocomplete
 });
 
 // =============================================
