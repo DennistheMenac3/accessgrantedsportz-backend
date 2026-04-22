@@ -91,6 +91,12 @@ export const execute = async (interaction: ChatInputCommandInteraction) => {
 export const buildTeamDashboardEmbed = (
     team: any, players: any[], w: number, l: number, t: number, pf: number, pa: number, totalTVS: number
 ) => {
+    // Dynamically calculate Team OVR based on the top 53 players
+    const top53 = players.slice(0, 53);
+    const dynamicOvr = top53.length > 0 
+        ? Math.round(top53.reduce((sum, p) => sum + p.overall_rating, 0) / top53.length) 
+        : team.overall_rating;
+
     const recordStr = t > 0 ? `${w}-${l}-${t}` : `${w}-${l}`;
     
     const topPlayers = players.slice(0, 5).map(p => {
@@ -102,13 +108,12 @@ export const buildTeamDashboardEmbed = (
         .setTitle(`🏈 ${team.city} ${team.name} (${team.abbreviation})`)
         .setColor('#2c3e50')
         .addFields(
-            { name: '📊 Overview', value: `**OVR:** ${team.overall_rating}\n**Record:** ${recordStr}\n**Net Pts:** ${pf} PF / ${pa} PA`, inline: true },
+            { name: '📊 Overview', value: `**OVR:** ${dynamicOvr}\n**Record:** ${recordStr}\n**Net Pts:** ${pf} PF / ${pa} PA`, inline: true },
             { name: '💰 Franchise Value', value: `**Total TVS:** ${totalTVS.toFixed(1)}\n**Roster Size:** ${players.length}/53`, inline: true },
             { name: '⭐ Top Players', value: topPlayers || 'No players found.', inline: false }
         )
-        .setFooter({ text: 'AccessGrantedSportz Analytics Engine' });
+        .setFooter({ text: 'AccessGrantedSportz Analytics Engine | OVR is dynamically calculated' });
 
-    // Inject Logo if it exists
     if (team.team_logo_url) {
         embed.setThumbnail(team.team_logo_url);
     }
@@ -149,22 +154,15 @@ export const buildRosterEmbed = (team: any, players: any[], page: number, totalP
 export const buildTeamButtons = (teamId: string, page: number, totalPages: number) => {
     const row = new ActionRowBuilder<ButtonBuilder>();
 
-    if (page > 0) {
-        row.addComponents(
-            new ButtonBuilder()
-                .setCustomId(`teamview_${teamId}_0`)
-                .setLabel('📊 Dashboard')
-                .setStyle(ButtonStyle.Secondary)
-        );
-    }
-
     row.addComponents(
         new ButtonBuilder()
-            // Give it a dummy ID on page 0 so it doesn't collide with the Next button
-            .setCustomId(page === 0 ? `teamview_${teamId}_prev_dead` : `teamview_${teamId}_${page - 1}`)
-            .setLabel('◀ Prev')
+            // If on page 0, give it a dead ID. Otherwise, point to the previous page.
+            .setCustomId(page === 0 ? `teamview_${teamId}_dead` : `teamview_${teamId}_${page - 1}`)
+            // Dynamically rename the Back button if returning to the dashboard
+            .setLabel(page === 1 ? '📊 Dashboard' : '◀ Prev')
             .setStyle(ButtonStyle.Primary)
-            .setDisabled(page <= 1), // Disabled on Page 0 and Page 1
+            .setDisabled(page === 0), // Disabled on the dashboard
+            
         new ButtonBuilder()
             .setCustomId(`teamview_${teamId}_${page + 1}`)
             .setLabel(page === 0 ? 'View Full Roster ▶' : 'Next ▶')
