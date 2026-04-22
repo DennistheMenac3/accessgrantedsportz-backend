@@ -86,6 +86,27 @@ app.use(morgan('dev'));
 // =============================================
 // 3. API ROUTES
 // =============================================
+
+// -> NEW GLOBAL PLAYER ROUTE ADDED HERE <-
+app.get('/api/players/:id', async (req: Request, res: Response): Promise<any> => {
+  try {
+    const playerId = req.params.id;
+    
+    // Use your existing 'pool' connection to find the player
+    const result = await pool.query('SELECT * FROM players WHERE id = $1', [playerId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Player not found' });
+    }
+
+    // Send the player data to the frontend
+    return res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching player by ID:', error);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
 app.use('/api/auth',                         authRoutes);
 app.use('/api/auth',                         discordAuthRoutes);
 app.use('/api/stripe',                       stripeRoutes);
