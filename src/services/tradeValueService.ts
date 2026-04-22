@@ -2,15 +2,15 @@ import { query } from '../config/database';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
- * RECALIBRATED TRADE VALUE SYSTEM (TVS 2.0)
- * Goal: Exponential OVR scaling, flat bonuses, and fixed pick anchors.
+ * ASSET VALUE (AV) LOGIC ENGINE
+ * Replaces the old TVS system with non-linear scaling and flat bonuses.
  */
 
 export const getMacroPosition = (pos: string): string => {
   const p = (pos || '').toUpperCase().trim();
   const olPositions = ['LT', 'LG', 'C', 'RG', 'RT'];
   const dlPositions = ['LE', 'RE', 'DT', 'LEDG', 'REDG', 'LEDGE', 'REDGE'];
-  const lbPositions = ['LOLB', 'MLB', 'ROLB', 'SAM', 'MIKE', 'WILL'];
+  const lbPositions = ['LOLB', 'MLB', 'ROLB', 'SAM', 'MIKE', 'WILL', 'MIKE', 'WILL'];
   const sPositions  = ['FS', 'SS'];
 
   if (olPositions.includes(p)) return 'OL';
@@ -20,27 +20,24 @@ export const getMacroPosition = (pos: string): string => {
   return p;
 };
 
-// 1. NON-LINEAR OVR CURVE
-// This ensures the gap between 80 and 90 is much larger than 60 and 70.
-const calculateBaseTVS = (ovr: number): number => {
-  // Formula: (OVR/10)^2.8 - creates a steep value curve
+// 1. NON-LINEAR OVR CURVE (The "Star Factor")
+const calculateBaseAV = (ovr: number): number => {
   return Math.round(Math.pow(ovr / 10, 2.8) * 10) / 10;
-  // 60 OVR = 151 | 70 OVR = 230 | 80 OVR = 333 | 90 OVR = 464 | 99 OVR = 609
 };
 
-// 2. FLAT AGE BONUSES (No more multipliers!)
+// 2. FLAT AGE BONUSES
 const getAgeBonus = (age: number): number => {
   if (age <= 21) return 80;
   if (age === 22) return 65;
-  if (age === 23) return 50; // Mike Tyson's age
+  if (age === 23) return 50;
   if (age === 24) return 35;
   if (age === 25) return 20;
   if (age === 26) return 10;
   if (age === 27) return 0;
-  return (27 - age) * 15; // Penalty for players 28+
+  return (27 - age) * 15;
 };
 
-// 3. DEV TRAIT FLAT VALUES
+// 3. DEV TRAIT FLAT BONUSES
 const getDevBonus = (dev: string): number => {
   const devMap: { [key: string]: number } = {
     'normal': 0,
@@ -48,31 +45,17 @@ const getDevBonus = (dev: string): number => {
     'superstar': 120,
     'xfactor': 250
   };
-  return devMap[dev.toLowerCase()] || 0;
+  return devMap[dev?.toLowerCase()] || 0;
 };
 
-// 4. POSITION PREMIUMS (Flat adjustments)
-const getPositionPremium = (pos: string): number => {
-  const premiums: { [key: string]: number } = {
-    'QB': 150,
-    'CB': 40,
-    'WR': 30,
-    'DL': 25,
-    'LB': 10,
-    'OL': 15,
-    'S': 5
-  };
-  return premiums[pos] || 0;
-};
-
-// 5. THRESHOLD-BASED SPEED BONUSES
+// 4. SPEED THRESHOLD BONUSES
 const calculateSpeedBonus = (pos: string, spd: number): number => {
   if (pos === 'LB') {
     if (spd >= 92) return 60;
     if (spd >= 90) return 30;
     if (spd >= 88) return 10;
     if (spd >= 85) return 0;
-    return -40; // Mike Tyson (84) now gets a significant penalty
+    return -40; // Penalty for 84 and below (The Mike Tyson Fix)
   }
   if (pos === 'DL') {
     if (spd >= 85) return 50;
@@ -80,42 +63,93 @@ const calculateSpeedBonus = (pos: string, spd: number): number => {
     if (spd >= 75) return 0;
     return -20;
   }
-  // Add other positions as needed...
   return 0;
 };
 
-// 6. DRAFT PICK ANCHORS
-const getPickValue = (round: number, tier: 'high' | 'mid' | 'low' = 'mid'): number => {
-  const pickMap: { [key: number]: number } = {
-    1: 450, // Mid 1st rounder
-    2: 180,
-    3: 80,
-    4: 40,
-    5: 20,
-    6: 10,
-    7: 5
-  };
-  return pickMap[round] || 0;
-};
-
+// 5. CORE CALCULATION (Exports 4 args for compatibility)
 export const calculateTradeValue = async (
   playerId: string,
-  leagueId: string
+  leagueId: string,
+  season:   number,
+  week?:    number
 ): Promise<{ total_value: number; breakdown: any }> => {
-  const playerResult = await query(`SELECT * FROM players WHERE id = $1`, [playerId]);
+  const playerResult = await query(
+    `SELECT p.*, pt.weight_lbs, pt.strength FROM players p 
+     LEFT JOIN player_traits pt ON pt.player_id = p.id 
+     WHERE p.id = $1 LIMIT 1`, [playerId]
+  );
+
+  if (playerResult.rows.length === 0) throw new Error(`Player ${playerId} not found`);
   const player = playerResult.rows[0];
   const macroPos = getMacroPosition(player.position);
 
-  const base = calculateBaseTVS(player.overall_rating);
+  const base = calculateBaseAV(player.overall_rating);
   const ageB = getAgeBonus(player.age);
   const devB = getDevBonus(player.dev_trait);
-  const posB = getPositionPremium(macroPos);
-  const spdB = calculateSpeedBonus(macroPos, player.speed);
+  const spdB = calculateSpeedBonus(macroPos, player.speed || 70);
 
-  const totalValue = base + ageB + devB + posB + spdB;
+  const totalValue = Math.max(1, base + ageB + devB + spdB);
+
+  const breakdown = {
+    base_value: base,
+    age_bonus: ageB,
+    dev_bonus: devB,
+    speed_bonus: spdB,
+    speed_tier: player.speed >= 90 ? 'ELITE' : 'AVERAGE' // Simplified for logging
+  };
+
+  // Log to history as the original code did
+  await query(
+    `INSERT INTO trade_value_history (id, player_id, league_id, season, week, total_value, value_breakdown)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
+    [uuidv4(), playerId, leagueId, season, week || 0, totalValue, JSON.stringify(breakdown)]
+  );
+
+  return { total_value: totalValue, breakdown };
+};
+
+// 6. LEAGUE ORCHESTRATOR (Restored for ingestionRoutes)
+export const calculateLeagueTradeValues = async (
+  leagueId: string,
+  season:   number,
+  week?:    number
+): Promise<{ processed: number; results: any[] }> => {
+  const players = await query(`SELECT id FROM players WHERE league_id = $1`, [leagueId]);
+  const results = [];
+
+  for (const row of players.rows) {
+    try {
+      const val = await calculateTradeValue(row.id, leagueId, season, week);
+      results.push({ player_id: row.id, total_value: val.total_value });
+    } catch (e) { console.error(e); }
+  }
+  return { processed: results.length, results };
+};
+
+// 7. TRADE ANALYZER (Restored for tradeController)
+export const analyzeTradeProposal = async (
+  offeredPlayerIds:   string[],
+  requestedPlayerIds: string[],
+  leagueId:           string,
+  season:             number
+): Promise<any> => {
+  const getSum = async (ids: string[]) => {
+    let sum = 0;
+    for (const id of ids) {
+      const res = await calculateTradeValue(id, leagueId, season);
+      sum += res.total_value;
+    }
+    return sum;
+  };
+
+  const offeredValue   = await getSum(offeredPlayerIds);
+  const requestedValue = await getSum(requestedPlayerIds);
+  const diff = offeredValue - requestedValue;
 
   return {
-    total_value: Math.max(1, totalValue), // Ensure value isn't negative
-    breakdown: { base, ageB, devB, posB, spdB }
+    offered_value: Math.round(offeredValue),
+    requested_value: Math.round(requestedValue),
+    value_difference: Math.round(diff),
+    fairness: Math.abs(diff) < 50 ? 'FAIR' : 'UNEVEN'
   };
 };
