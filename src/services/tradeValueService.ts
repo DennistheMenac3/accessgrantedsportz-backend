@@ -126,30 +126,57 @@ export const calculateLeagueTradeValues = async (
   return { processed: results.length, results };
 };
 
-// 7. TRADE ANALYZER (Restored for tradeController)
+// =============================================
+// ANALYZE TRADE PROPOSAL (AV VERSION)
+// Forces fresh calculations, ignores DB cache
+// =============================================
 export const analyzeTradeProposal = async (
   offeredPlayerIds:   string[],
   requestedPlayerIds: string[],
   leagueId:           string,
   season:             number
 ): Promise<any> => {
-  const getSum = async (ids: string[]) => {
-    let sum = 0;
-    for (const id of ids) {
-      const res = await calculateTradeValue(id, leagueId, season);
-      sum += res.total_value;
+  const getPlayerValues = async (playerIds: string[]) => {
+    const players = [];
+    for (const id of playerIds) {
+      // Just get the base player data, ignore the old trade_value_history
+      const playerResult = await query(
+        `SELECT p.* FROM players p WHERE p.id = $1`,
+        [id]
+      );
+      
+      if (playerResult.rows.length > 0) {
+        const player = playerResult.rows[0];
+        // FORCE a fresh calculation using the new AV logic
+        const { total_value, breakdown } = await calculateTradeValue(id, leagueId, season);
+        
+        player.total_value = total_value;
+        player.value_breakdown = breakdown;
+        players.push(player);
+      }
     }
-    return sum;
+    return players;
   };
 
-  const offeredValue   = await getSum(offeredPlayerIds);
-  const requestedValue = await getSum(requestedPlayerIds);
-  const diff = offeredValue - requestedValue;
+  const offeredPlayers   = await getPlayerValues(offeredPlayerIds);
+  const requestedPlayers = await getPlayerValues(requestedPlayerIds);
+
+  const offeredValue   = offeredPlayers.reduce((sum, p) => sum + p.total_value, 0);
+  const requestedValue = requestedPlayers.reduce((sum, p) => sum + p.total_value, 0);
+
+  const difference  = offeredValue - requestedValue;
+  
+  // Set fairness thresholds based on the new 1st Round Pick value (~450 AV)
+  let fairness = 'FAIR';
+  if (difference > 150) fairness = 'FAVORS_OFFER';
+  if (difference < -150) fairness = 'FAVORS_RECEIVER';
 
   return {
-    offered_value: Math.round(offeredValue),
-    requested_value: Math.round(requestedValue),
-    value_difference: Math.round(diff),
-    fairness: Math.abs(diff) < 50 ? 'FAIR' : 'UNEVEN'
+    offered_value:    Math.round(offeredValue * 100) / 100,
+    requested_value:  Math.round(requestedValue * 100) / 100,
+    value_difference: Math.round(difference * 100) / 100,
+    fairness,
+    offered_players:   offeredPlayers,
+    requested_players: requestedPlayers
   };
 };
