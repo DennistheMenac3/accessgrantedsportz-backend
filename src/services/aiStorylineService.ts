@@ -2233,8 +2233,27 @@ ${contractDumps.slice(0, 5).map((p: any) => `${p.name} (${p.position}, ${p.team_
 };
 
 // =============================================
+// UNIVERSAL ANTI-BIAS RULES
+// Applied to ALL AI generation functions
+// =============================================
+const CRITICAL_RULES =
+  `CRITICAL RULES — FOLLOW WITHOUT EXCEPTION:\n` +
+  `1. Base ALL analysis EXCLUSIVELY on the league data provided. No exceptions.\n` +
+  `2. Do NOT reference real NFL history, Super Bowl results, or real-world outcomes.\n` +
+  `3. Do NOT assume any team or player is elite based on real NFL reputation. ` +
+  `A 1-10 Chiefs team is a bad team in this league. Judge only by the numbers.\n` +
+  `4. Do NOT mention any player by name unless they appear in the data provided.\n` +
+  `5. Do NOT give any franchise preferential treatment based on popularity.\n` +
+  `6. Never mention video games, simulation, or anything that breaks immersion.\n` +
+  `7. Never invent stats, plays, or events not present in the data.\n` +
+  `8. This league exists in its own universe. Real-world news has zero relevance.\n` +
+  `9. Do NOT use markdown headers (##, **, ---). Write in plain paragraphs.\n` +
+  `10. Your verdict and recommendation MUST be consistent throughout. ` +
+  `If you say one team wins the trade, do not recommend that team accept it.`;
+
+// =============================================
 // AI TRADE ADVISOR
-// Analyzes trade with full roster context
+// Full GM-level analysis with scarcity context
 // =============================================
 export const generateTradeAdvice = async (
   offeredPlayerIds:   string[],
@@ -2246,6 +2265,13 @@ export const generateTradeAdvice = async (
   verdict: string;
   winner:  string;
 }> => {
+  // Import here to avoid circular dependency
+  const {
+    calculateTradeValue,
+    getMacroPosition,
+    getPositionalScarcity,
+    getPlayerTrajectory
+  } = await import('./tradeValueService');
 
   const getPlayerInfo = async (playerIds: string[]) => {
     const players = [];
@@ -2254,41 +2280,44 @@ export const generateTradeAdvice = async (
         `SELECT p.*,
           t.name         as team_name,
           t.abbreviation as team_abbr,
-          t.wins, t.losses,
-          tvh.total_value
+          t.wins,        t.losses,
+          t.overall_rating as team_ovr
          FROM players p
          LEFT JOIN teams t ON t.id = p.team_id
-         LEFT JOIN trade_value_history tvh
-           ON tvh.player_id = p.id
-           AND tvh.league_id = $2
          WHERE p.id = $1
-         ORDER BY tvh.calculated_at DESC
          LIMIT 1`,
-        [id, leagueId]
+        [id]
       );
-      if (result.rows.length > 0) players.push(result.rows[0]);
+      if (result.rows.length > 0) {
+        const player = result.rows[0];
+        // Always force fresh AV calculation
+        const { total_value, breakdown } = await calculateTradeValue(
+          id, leagueId, season
+        );
+        player.total_value     = total_value;
+        player.value_breakdown = breakdown;
+
+        // Get scarcity data
+        player.scarcity = await getPositionalScarcity(id, leagueId);
+        players.push(player);
+      }
     }
     return players;
   };
 
-  const offeredPlayers   = await getPlayerInfo(offeredPlayerIds);
-  const requestedPlayers = await getPlayerInfo(requestedPlayerIds);
-
-  if (!offeredPlayers.length || !requestedPlayers.length) {
-    throw new Error('Players not found');
-  }
-
   const getTeamRoster = async (teamId: string) => {
     const result = await query(
-      `SELECT p.first_name, p.last_name, p.position,
+      `SELECT
+        p.first_name, p.last_name, p.position,
         p.overall_rating, p.age, p.dev_trait, p.speed,
         COALESCE(tvh.total_value, 0) as trade_value
        FROM players p
        LEFT JOIN trade_value_history tvh
-         ON tvh.player_id = p.id
+         ON tvh.player_id  = p.id
          AND tvh.league_id = $2
        WHERE p.team_id = $1
-       ORDER BY p.overall_rating DESC`,
+       ORDER BY p.overall_rating DESC
+       LIMIT 10`,
       [teamId, leagueId]
     );
     return result.rows;
@@ -2315,6 +2344,13 @@ export const generateTradeAdvice = async (
     }
   };
 
+  const offeredPlayers   = await getPlayerInfo(offeredPlayerIds);
+  const requestedPlayers = await getPlayerInfo(requestedPlayerIds);
+
+  if (!offeredPlayers.length || !requestedPlayers.length) {
+    throw new Error('Players not found');
+  }
+
   const offeredTeamId   = offeredPlayers[0].team_id;
   const requestedTeamId = requestedPlayers[0].team_id;
 
@@ -2330,133 +2366,160 @@ export const generateTradeAdvice = async (
     getTeamDraftPicksForAdvice(requestedTeamId)
   ]);
 
-  const offeredValue = offeredPlayers.reduce(
-    (sum, p) => sum + parseFloat(p.total_value || 0), 0
+  const offeredValue   = offeredPlayers.reduce(
+    (sum, p) => sum + p.total_value, 0
   );
   const requestedValue = requestedPlayers.reduce(
-    (sum, p) => sum + parseFloat(p.total_value || 0), 0
+    (sum, p) => sum + p.total_value, 0
   );
-  const valueDiff = offeredValue - requestedValue;
+  const valueDiff    = offeredValue - requestedValue;
+  const absValueDiff = Math.abs(valueDiff);
+
+  // Team receiving the higher AV wins
+  const winningTeam = offeredValue > requestedValue
+    ? requestedPlayers[0].team_name  // They receive offered players
+    : offeredPlayers[0].team_name;   // They receive requested players
+
+  const verdict =
+    absValueDiff <= 20  ? 'FAIR'           :
+    absValueDiff <= 60  ? 'SLIGHT EDGE'    :
+    absValueDiff <= 120 ? 'CLEAR ADVANTAGE':
+    absValueDiff <= 200 ? 'LOPSIDED'       :
+    'HIGHWAY ROBBERY';
 
   const devLabel = (dev: string) =>
     dev === 'xfactor'   ? 'XFactor'  :
     dev === 'superstar' ? 'Superstar' :
     dev === 'star'      ? 'Star'      : 'Normal';
 
-  const formatRoster = (roster: any[]) =>
-    roster.slice(0, 8).map(p =>
-      `${p.first_name} ${p.last_name} (${p.position} | ` +
-      `${p.overall_rating} OVR | ${devLabel(p.dev_trait)} | ` +
-      `TVS: ${parseFloat(p.trade_value || 0).toFixed(0)})`
+  const formatRoster = (roster: any[], teamName: string) =>
+    `${teamName} (top 10):\n` +
+    roster.map(p =>
+      `  ${p.first_name} ${p.last_name} | ${p.position} | ` +
+      `${p.overall_rating} OVR | Age: ${p.age} | ` +
+      `${devLabel(p.dev_trait)} | AV: ${parseFloat(p.trade_value).toFixed(0)}`
     ).join('\n');
 
   const formatPicks = (picks: any[], teamAbbr: string) =>
     picks.length === 0
       ? 'No picks in rounds 1-3'
       : picks.map(p =>
-          `Rd${p.round} #${p.pick_number} ` +
+          `  Rd${p.round} Pick #${p.pick_number || '?'} ` +
           `${p.original_team_abbr !== teamAbbr
-            ? `(via ${p.original_team_abbr})` : ''}` +
-          ` TVS: ${p.trade_value}`
+            ? `(via ${p.original_team_abbr})` : '(own)'}` +
+          ` AV: ${p.trade_value}`
         ).join('\n');
 
-  const prompt =
-    `You are the AccessGrantedSportz Trade Advisor — the most knowledgeable ` +
-    `Madden franchise trade analyst. Give direct, opinionated, specific advice.\n\n` +
-    `TRADE PROPOSAL:\n` +
-    `━━━━━━━━━━━━━━\n` +
-    `OFFERING: ${offeredPlayers.map(p =>
-      `${p.first_name} ${p.last_name} | ${p.position} | ` +
-      `${p.team_name} (${p.wins}-${p.losses}) | ` +
+  // =============================================
+  // BUILD SCARCITY + TRAJECTORY CONTEXT
+  // Pure data — no AI tokens wasted on this
+  // =============================================
+  const formatPlayerContext = (p: any) => {
+    const macro      = getMacroPosition(p.position);
+    const trajectory = getPlayerTrajectory(p.age);
+    const s          = p.scarcity;
+    return (
+      `${p.first_name} ${p.last_name}\n` +
+      `  Position: ${p.position} (${macro}) | ` +
       `OVR: ${p.overall_rating} | Age: ${p.age} | ` +
-      `${devLabel(p.dev_trait)} | Speed: ${p.speed} | ` +
-      `TVS: ${parseFloat(p.total_value || 0).toFixed(1)}`
-    ).join(', ')}\n\n` +
-    `REQUESTING: ${requestedPlayers.map(p =>
-      `${p.first_name} ${p.last_name} | ${p.position} | ` +
-      `${p.team_name} (${p.wins}-${p.losses}) | ` +
-      `OVR: ${p.overall_rating} | Age: ${p.age} | ` +
-      `${devLabel(p.dev_trait)} | Speed: ${p.speed} | ` +
-      `TVS: ${parseFloat(p.total_value || 0).toFixed(1)}`
-    ).join(', ')}\n\n` +
-    `VALUE GAP: ${Math.abs(valueDiff).toFixed(1)} TVS ` +
-    `(${valueDiff > 0
-      ? 'Offering team overpaying'
-      : 'Receiving team overpaying'})\n\n` +
-    `━━━━━━━━━━━━━━\n` +
-    `${offeredPlayers[0].team_name} ROSTER (top 8):\n` +
-    `${formatRoster(offeredRoster)}\n\n` +
-    `${offeredPlayers[0].team_name} DRAFT PICKS:\n` +
-    `${formatPicks(offeredPicks, offeredPlayers[0].team_abbr)}\n\n` +
-    `━━━━━━━━━━━━━━\n` +
-    `${requestedPlayers[0].team_name} ROSTER (top 8):\n` +
-    `${formatRoster(requestedRoster)}\n\n` +
-    `${requestedPlayers[0].team_name} DRAFT PICKS:\n` +
-    `${formatPicks(requestedPicks, requestedPlayers[0].team_abbr)}\n\n` +
-    `━━━━━━━━━━━━━━\n` +
-    `MADDEN RULES:\n` +
-    `- XFactor players are worth 40-60% more than overall suggests\n` +
-    `- Young XFactors under 25 are franchise cornerstones\n` +
-    `- Normal dev players depreciate fast — especially age 28+\n` +
-    `- Speed 90+ commands a premium at any position\n` +
-    `- 1st round pick = 75-180 TVS depending on slot\n` +
-    `- Consider team needs and roster depth\n\n` +
-    `Provide:\n` +
-    `1. Is this fair? (yes/no)\n` +
-    `2. Who wins and why — be specific\n` +
-    `3. What each team needs based on their roster\n` +
-    `4. Exactly what to add to make it fair (use real player names or picks)\n` +
-    `5. Final verdict — do this trade or not?\n\n` +
-    `Be direct and opinionated. Under 350 words. Use bullet points.\n` +
-    `Do NOT mention ESPN, First Take, or any media personalities.`
-    
-    const CRITICAL_RULES =
-  `CRITICAL RULES — FOLLOW WITHOUT EXCEPTION:\n` +
-  `1. Base ALL analysis EXCLUSIVELY on the league data provided in this prompt. ` +
-  `No exceptions.\n` +
-  `2. Do NOT reference real NFL history, Super Bowl results, playoff records, ` +
-  `championships, or any real-world outcomes.\n` +
-  `3. Do NOT assume any team or player is elite based on their real NFL reputation. ` +
-  `A 1-10 Kansas City Chiefs team is a bad team in this league. ` +
-  `A 10-1 Jacksonville Jaguars team is the best team in this league. ` +
-  `Judge only by the numbers in front of you.\n` +
-  `4. Do NOT mention Patrick Mahomes, Josh Allen, Lamar Jackson, or any player ` +
-  `by name unless they appear in the league data provided with actual stats.\n` +
-  `5. Do NOT give any franchise preferential treatment based on real-world ` +
-  `popularity — Cowboys, Patriots, Chiefs, 49ers, etc. are treated identically ` +
-  `to any other team. Their record in THIS league is all that matters.\n` +
-  `6. If a star player has poor stats in this league, reflect that honestly. ` +
-  `Do not invent excuses or imply they are still elite despite the numbers.\n` +
-  `7. If a low-profile player has elite stats in this league, give them ` +
-  `full credit. The data is the truth.\n` +
-  `8. Never mention video games, simulation, Madden, or anything that breaks ` +
-  `the immersion of a real professional league.\n` +
-  `9. Never invent statistics, plays, drives, or events not present in the data. ` +
-  `If the data is sparse, write less. Do not pad with fiction.\n` +
-  `10. This league exists in its own universe. Real-world trades, injuries, ` +
-  `retirements, and news have zero relevance here.`;
+      `Dev: ${devLabel(p.dev_trait)} | Speed: ${p.speed}\n` +
+      `  AV: ${p.total_value.toFixed(1)}\n` +
+      `  Trajectory: ${trajectory}\n` +
+      `  Positional rank: #${s.position_rank} of ${s.position_total} ` +
+      `${macro} players in the league\n` +
+      `  Scarcity: ${s.scarcity_label}\n` +
+      `  Replaceability: ${s.replacement_quality}\n` +
+      `  OVR drop to next best: ${s.ovr_drop_to_next} points`
+    );
+  };
+
+  // Positional overlap check
+  const offeredMacros   = offeredPlayers.map(
+    (p: any) => getMacroPosition(p.position)
+  );
+  const requestedMacros = requestedPlayers.map(
+    (p: any) => getMacroPosition(p.position)
+  );
+  const hasOverlap = offeredMacros.some(
+    (pos: string) => requestedMacros.includes(pos)
+  );
+  const overlapNote = hasOverlap
+    ? `Both players occupy the same position group (${offeredMacros[0]}). ` +
+      `Factor in whether receiving teams already have depth there.`
+    : `These players play different position groups — both teams address a different need.`;
+
+  // =============================================
+  // SYSTEM PROMPT
+  // =============================================
+  const systemPrompt =
+    `You are the Trade Advisor for AccessGrantedSportz, ` +
+    `a competitive franchise league platform.\n\n` +
+    CRITICAL_RULES + `\n\n` +
+    `TRADE ADVISOR SPECIFIC RULES:\n` +
+    `1. The AV (Asset Value) numbers are the source of truth. ` +
+    `Higher AV = better value. The team receiving higher AV wins the trade.\n` +
+    `2. A younger ascending player is worth MORE than an older declining player ` +
+    `at the same position — even if the older player has a higher current OVR. ` +
+    `The AV system already accounts for this. Trust it.\n` +
+    `3. If a player is IRREPLACEABLE or ELITE SCARCE at their position, ` +
+    `that significantly raises their real value beyond raw AV.\n` +
+    `4. A rational GM never trades an ascending XFactor for a declining one ` +
+    `at the same position without significant extra compensation. Call this out.\n` +
+    `5. Consider positional overlap — trading for depth at a position you already ` +
+    `have covered is less valuable than filling a genuine need.\n` +
+    `6. Your verdict in the opening sentence MUST match your final recommendation. ` +
+    `If Team A wins the trade, recommend Team B reject or counter — not accept.\n` +
+    `7. Write in four clean paragraphs under 300 words total:\n` +
+    `   Para 1: Verdict — who wins and by how much\n` +
+    `   Para 2: Why — trajectory, scarcity, positional context\n` +
+    `   Para 3: What makes it fair — specific addition needed\n` +
+    `   Para 4: Final recommendation — who should do what`;
+
+  // =============================================
+  // USER PROMPT
+  // =============================================
+  const userPrompt =
+    `Analyze this trade proposal.\n\n` +
+
+    `AV SUMMARY:\n` +
+    `Offering side total AV: ${offeredValue.toFixed(1)}\n` +
+    `Receiving side total AV: ${requestedValue.toFixed(1)}\n` +
+    `Gap: ${absValueDiff.toFixed(1)} AV favoring ${winningTeam}\n` +
+    `Verdict: ${verdict}\n\n` +
+
+    `PLAYERS BEING OFFERED:\n` +
+    offeredPlayers.map(formatPlayerContext).join('\n\n') + `\n\n` +
+
+    `PLAYERS BEING REQUESTED:\n` +
+    requestedPlayers.map(formatPlayerContext).join('\n\n') + `\n\n` +
+
+    `POSITIONAL CONTEXT:\n` +
+    overlapNote + `\n\n` +
+
+    `ROSTERS:\n` +
+    formatRoster(offeredRoster,   offeredPlayers[0].team_name) + `\n\n` +
+    formatRoster(requestedRoster, requestedPlayers[0].team_name) + `\n\n` +
+
+    `DRAFT PICKS:\n` +
+    `${offeredPlayers[0].team_name}:\n` +
+    formatPicks(offeredPicks,   offeredPlayers[0].team_abbr) + `\n` +
+    `${requestedPlayers[0].team_name}:\n` +
+    formatPicks(requestedPicks, requestedPlayers[0].team_abbr) + `\n\n` +
+
+    `Write your analysis now. Plain text. No headers. No bullet points. ` +
+    `Four paragraphs. Under 300 words. ` +
+    `Your opening verdict and closing recommendation must be consistent.`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-5',
+    model:      'claude-sonnet-4-5',
     max_tokens: 800,
-    messages:   [{ role: 'user', content: prompt }]
+    system:     systemPrompt,
+    messages:   [{ role: 'user', content: userPrompt }]
   });
 
   const advice = response.content[0].type === 'text'
     ? response.content[0].text
     : 'Unable to generate advice.';
 
-  const winner =
-    Math.abs(valueDiff) <= 10  ? 'Even trade'                   :
-    valueDiff > 0              ? requestedPlayers[0].team_name  :
-    offeredPlayers[0].team_name;
-
-  const verdict =
-    Math.abs(valueDiff) <= 10  ? '✅ FAIR'            :
-    Math.abs(valueDiff) <= 25  ? '🟡 SLIGHTLY UNEVEN' :
-    Math.abs(valueDiff) <= 50  ? '🟠 UNEVEN'          :
-    Math.abs(valueDiff) <= 100 ? '🔴 LOPSIDED'        :
-    '🚨 HIGHWAY ROBBERY';
-
-  return { advice, verdict, winner };
+  return { advice, verdict, winner: winningTeam };
 };

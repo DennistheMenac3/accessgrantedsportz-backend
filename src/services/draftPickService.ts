@@ -3,7 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 
 // =============================================
 // DRAFT PICK VALUE CHART
-// Based on Madden community trade standards
+// Aligned with AV system
+// 1st round picks range 75-180 AV
 // =============================================
 export const getDraftPickValue = (
   round:      number,
@@ -38,27 +39,24 @@ export const getDraftPickValue = (
 
 // =============================================
 // GET PICK LABEL
-// Returns human readable pick description
 // =============================================
 export const getPickLabel = (
-  round:       number,
-  pickNumber:  number | null,
-  teamAbbr:    string,
-  season:      number
+  round:      number,
+  pickNumber: number | null,
+  teamAbbr:   string,
+  season:     number
 ): string => {
-  const roundLabel = 
+  const roundLabel =
     round === 1 ? '1st' :
     round === 2 ? '2nd' :
     round === 3 ? '3rd' : `${round}th`;
 
-  const pickLabel = pickNumber
-    ? `#${pickNumber}`
-    : 'Unknown slot';
+  const pickLabel = pickNumber ? `#${pickNumber}` : 'Unknown slot';
 
   const tier =
-    round === 1 && pickNumber && pickNumber <= 3   ? ' (TOP 3)' :
-    round === 1 && pickNumber && pickNumber <= 8   ? ' (TOP 10)' :
-    round === 1 && pickNumber && pickNumber <= 16  ? ' (TOP 16)' :
+    round === 1 && pickNumber && pickNumber <= 3  ? ' (TOP 3)'  :
+    round === 1 && pickNumber && pickNumber <= 8  ? ' (TOP 10)' :
+    round === 1 && pickNumber && pickNumber <= 16 ? ' (TOP 16)' :
     '';
 
   return `${season} ${teamAbbr} ${roundLabel} Round ${pickLabel}${tier}`;
@@ -66,13 +64,11 @@ export const getPickLabel = (
 
 // =============================================
 // GENERATE DRAFT PICKS FOR A SEASON
-// Creates all 32 picks per round for a league
 // =============================================
 export const generateSeasonDraftPicks = async (
   leagueId: string,
   season:   number
 ): Promise<void> => {
-  // Get all teams in league
   const teamsResult = await query(
     `SELECT id FROM teams WHERE league_id = $1`,
     [leagueId]
@@ -80,7 +76,6 @@ export const generateSeasonDraftPicks = async (
 
   const teams = teamsResult.rows;
 
-  // Generate 7 rounds of picks
   for (let round = 1; round <= 7; round++) {
     for (let i = 0; i < teams.length; i++) {
       const teamId    = teams[i].id;
@@ -96,27 +91,20 @@ export const generateSeasonDraftPicks = async (
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT DO NOTHING`,
         [
-          uuidv4(),
-          leagueId,
-          season,
-          round,
-          pickNum,
-          teamId,
-          teamId,
-          pickValue
+          uuidv4(), leagueId, season, round,
+          pickNum, teamId, teamId, pickValue
         ]
       );
     }
   }
 
   console.log(
-    `✅ Generated ${teams.length * 7} draft picks for season ${season}`
+    `Generated ${teams.length * 7} draft picks for season ${season}`
   );
 };
 
 // =============================================
 // GET TEAM DRAFT PICKS
-// Returns all picks a team currently owns
 // =============================================
 export const getTeamDraftPicks = async (
   teamId:   string,
@@ -143,11 +131,10 @@ export const getTeamDraftPicks = async (
 
 // =============================================
 // TRADE DRAFT PICK
-// Transfers pick from one team to another
 // =============================================
 export const tradeDraftPick = async (
-  pickId:       string,
-  newTeamId:    string
+  pickId:    string,
+  newTeamId: string
 ): Promise<void> => {
   await query(
     `UPDATE draft_picks
@@ -161,7 +148,6 @@ export const tradeDraftPick = async (
 
 // =============================================
 // GET ALL LEAGUE DRAFT PICKS
-// Shows full draft board
 // =============================================
 export const getLeagueDraftPicks = async (
   leagueId: string,
