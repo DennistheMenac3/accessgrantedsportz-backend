@@ -126,7 +126,7 @@ export const execute = async (
           `${p.position} | ${p.team_abbr || 'FA'} ` +
           `(${p.wins || 0}-${p.losses || 0}) | ` +
           `OVR: ${p.overall_rating} | ` +
-          `TVS: ${parseFloat(p.trade_value).toFixed(1)}`,
+          `AV: ${parseFloat(p.trade_value).toFixed(1)}`,
         inline: false
       }));
 
@@ -184,7 +184,7 @@ export const execute = async (
         {
           name:   'Trade Value',
           value:
-            `TVS   ${tradeValue.toFixed(1)}\n` +
+            `AV   ${tradeValue.toFixed(1)}\n` +
             `Tier   ${valueTier}`,
           inline: true
         }
@@ -205,9 +205,9 @@ export const execute = async (
     embed
       .setFooter({
         text:
-          'TVS — Trade Value Score  ·  ' +
+          'AV — Asset Value  ·  ' +
           'ELITE 200+  ·  FRANCHISE 150+  ·  PREMIUM 100+  ·  ' +
-          'SOLID 50+  ·  DEPTH <50  ·  AccessGrantedSportz'
+          'SOLID 50+  ·  BENCHWARMER <50  ·  AccessGrantedSportz'
       })
       .setTimestamp();
 

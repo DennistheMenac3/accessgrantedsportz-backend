@@ -1,11 +1,13 @@
 import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
-  AutocompleteInteraction
+  AutocompleteInteraction,
+  EmbedBuilder
 } from 'discord.js';
 import { query } from '../../config/database';
 import { generateTradeAdvice } from '../../services/aiStorylineService';
-import { COLORS, createEmbed, createTradeEmbed, getDevTraitLabel } from '../../config/brand';
+import { calculateTradeValue, getMacroPosition, getPlayerTrajectory, getPositionalScarcity } from '../../services/tradeValueService';
+import { COLORS, createEmbed, getDevTraitIcon, getDevTraitLabel } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -31,21 +33,18 @@ const findPlayer = async (
       p.position, p.overall_rating,
       p.dev_trait, p.age, p.speed,
       p.team_id, p.portrait_url,
+      p.years_pro,
       t.name         as team_name,
       t.abbreviation as team_abbr,
-      t.wins, t.losses,
-      COALESCE(tvh.total_value, 0) as trade_value
+      t.wins, t.losses
      FROM players p
      LEFT JOIN teams t ON t.id = p.team_id
-     LEFT JOIN trade_value_history tvh
-       ON tvh.player_id  = p.id
-       AND tvh.league_id = p.league_id
      WHERE p.league_id = $1
      AND ${isUUID
        ? 'p.id = $2'
        : `LOWER(p.first_name || ' ' || p.last_name) LIKE LOWER('%' || $2 || '%')`
      }
-     ORDER BY tvh.calculated_at DESC, p.overall_rating DESC
+     ORDER BY p.overall_rating DESC
      LIMIT 1`,
     [leagueId, input]
   );
@@ -108,9 +107,7 @@ export const autocomplete = async (
 export const execute = async (
   interaction: ChatInputCommandInteraction
 ) => {
-  try {
-    await interaction.deferReply();
-  } catch { return; }
+  try { await interaction.deferReply(); } catch { return; }
 
   try {
     const league = await getLeagueForServer(interaction.guildId!);
@@ -137,7 +134,7 @@ export const execute = async (
           .setTitle('Player Not Found')
           .setDescription(
             `No player matching "${offeringInput}" found.\n` +
-            `Try the autocomplete dropdown for best results.`
+            `Try the autocomplete dropdown.`
           )]
       });
       return;
@@ -148,7 +145,7 @@ export const execute = async (
           .setTitle('Player Not Found')
           .setDescription(
             `No player matching "${requestingInput}" found.\n` +
-            `Try the autocomplete dropdown for best results.`
+            `Try the autocomplete dropdown.`
           )]
       });
       return;
@@ -159,12 +156,47 @@ export const execute = async (
       embeds: [createEmbed(COLORS.NAVY)
         .setTitle('Trade Advisor  ·  Analyzing')
         .setDescription(
-          `${offered.first_name} ${offered.last_name}  ↔  ` +
+          `${offered.first_name} ${offered.last_name}` +
+          `  ↔  ` +
           `${requested.first_name} ${requested.last_name}\n\n` +
-          `Evaluating rosters and trade value...`
+          `Calculating asset values and roster context...`
         )]
     });
 
+    // Force fresh AV calculations for both players
+    const [
+      offeredAV,
+      requestedAV,
+      offeredScarcity,
+      requestedScarcity
+    ] = await Promise.all([
+      calculateTradeValue(offered.id,   league.id, league.current_season),
+      calculateTradeValue(requested.id, league.id, league.current_season),
+      getPositionalScarcity(offered.id,   league.id),
+      getPositionalScarcity(requested.id, league.id)
+    ]);
+
+    offered.av   = offeredAV.total_value;
+    requested.av = requestedAV.total_value;
+
+    const avDiff      = Math.abs(offered.av - requested.av);
+    const avWinner    = offered.av > requested.av ? requested : offered;
+    const avLoser     = offered.av > requested.av ? offered   : requested;
+
+    const verdict =
+      avDiff <= 20  ? 'FAIR'            :
+      avDiff <= 60  ? 'SLIGHT EDGE'     :
+      avDiff <= 120 ? 'CLEAR ADVANTAGE' :
+      avDiff <= 200 ? 'LOPSIDED'        :
+      'HIGHWAY ROBBERY';
+
+    const verdictColor =
+      avDiff <= 20  ? COLORS.SUCCESS :
+      avDiff <= 60  ? COLORS.GOLD    :
+      avDiff <= 120 ? COLORS.ORANGE  :
+      COLORS.DANGER;
+
+    // Get AI analysis
     const advice = await generateTradeAdvice(
       [offered.id],
       [requested.id],
@@ -172,68 +204,97 @@ export const execute = async (
       league.current_season
     );
 
-    const offeredValue   = parseFloat(offered.trade_value   || '0');
-    const requestedValue = parseFloat(requested.trade_value || '0');
-    const diff           = Math.abs(offeredValue - requestedValue);
-
     const profileUrl1 = `https://accessgrantedsportz.com/player/${offered.id}`;
     const profileUrl2 = `https://accessgrantedsportz.com/player/${requested.id}`;
 
-    const embed = createTradeEmbed(diff)
-      .setTitle('Trade Analysis  ·  AccessGrantedSportz')
+    const formatPlayerCard = (
+      p:        any,
+      av:       number,
+      scarcity: any,
+      label:    string,
+      url:      string
+    ): string => {
+      const trajectory = getPlayerTrajectory(p.age);
+      const macroPos   = getMacroPosition(p.position);
+
+      return (
+        `**[${p.first_name} ${p.last_name}](${url})**\n` +
+        `${p.position}  ·  ${p.team_abbr || 'FA'}` +
+        `${p.team_abbr ? `  (${p.wins || 0}-${p.losses || 0})` : ''}\n` +
+        `\n` +
+        `OVR  ${p.overall_rating}` +
+        `  ·  Age  ${p.age}` +
+        `  ·  Spd  ${p.speed}\n` +
+        `${getDevTraitLabel(p.dev_trait)}\n` +
+        `\n` +
+        `AV  **${av.toFixed(0)}**\n` +
+        `Rank  #${scarcity.position_rank} of ${scarcity.position_total} ${macroPos}\n` +
+        `${scarcity.scarcity_label}\n` +
+        `Trajectory  ${trajectory.split(' — ')[0]}`
+      );
+    };
+
+    // Main embed
+    const mainEmbed = new EmbedBuilder()
+      .setColor(verdictColor as any)
+      .setTitle(`Trade Analysis  ·  ${league.name}`)
       .setDescription(
-        `${advice.verdict}  ·  ` +
-        `Gap: ${diff.toFixed(1)} TVS  ·  ` +
-        `Advantage: ${advice.winner}`
+        `**${verdict}**` +
+        `  ·  AV Gap: **${avDiff.toFixed(0)}**` +
+        `  ·  **${avWinner.team_name || avWinner.team_abbr}** has the advantage`
       )
       .addFields(
         {
-          name:   'You Offer',
-          value:
-            `[${offered.first_name} ${offered.last_name}](${profileUrl1})\n` +
-            `${offered.position}  ·  ${offered.team_abbr || 'FA'} ` +
-            `(${offered.wins || 0}-${offered.losses || 0})\n` +
-            `OVR: ${offered.overall_rating}  ·  ` +
-            `Age: ${offered.age}  ·  ` +
-            `Spd: ${offered.speed}\n` +
-            `${getDevTraitLabel(offered.dev_trait)}\n` +
-            `TVS: ${offeredValue.toFixed(1)}`,
+          name:   `Offering  ·  ${offered.team_name || 'Free Agent'}`,
+          value:  formatPlayerCard(
+            offered, offered.av, offeredScarcity,
+            'Offering', profileUrl1
+          ),
           inline: true
         },
         {
-          name:   'You Receive',
-          value:
-            `[${requested.first_name} ${requested.last_name}](${profileUrl2})\n` +
-            `${requested.position}  ·  ${requested.team_abbr || 'FA'} ` +
-            `(${requested.wins || 0}-${requested.losses || 0})\n` +
-            `OVR: ${requested.overall_rating}  ·  ` +
-            `Age: ${requested.age}  ·  ` +
-            `Spd: ${requested.speed}\n` +
-            `${getDevTraitLabel(requested.dev_trait)}\n` +
-            `TVS: ${requestedValue.toFixed(1)}`,
+          name:   `Receiving  ·  ${requested.team_name || 'Free Agent'}`,
+          value:  formatPlayerCard(
+            requested, requested.av, requestedScarcity,
+            'Receiving', profileUrl2
+          ),
           inline: true
         },
         {
-          name:   'Trade Advisor',
-          value:  advice.advice.slice(0, 1024),
+          name:   'AV Breakdown',
+          value:
+            `${offered.first_name} ${offered.last_name}` +
+            `  →  AV **${offered.av.toFixed(0)}**\n` +
+            `${requested.first_name} ${requested.last_name}` +
+            `  →  AV **${requested.av.toFixed(0)}**\n` +
+            `Gap  **${avDiff.toFixed(0)} AV** favoring ` +
+            `**${avWinner.first_name} ${avWinner.last_name}**`,
           inline: false
         }
       )
       .setFooter({
-        text: 'TVS — Trade Value Score  ·  AccessGrantedSportz'
+        text:
+          'AV — Asset Value  ·  ' +
+          'Accounts for overall, age curve, dev trait, speed, and positional scarcity  ·  ' +
+          'AccessGrantedSportz'
       })
       .setTimestamp();
 
-    await interaction.editReply({ embeds: [embed] });
-
-    // Overflow
-    if (advice.advice.length > 1024) {
-      await interaction.followUp({
-        embeds: [createEmbed(COLORS.NAVY)
-          .setDescription(advice.advice.slice(1024, 4096))
-          .setFooter({ text: 'AccessGrantedSportz' })]
-      });
+    // Add portraits if available
+    if (offered.portrait_url) {
+      mainEmbed.setThumbnail(offered.portrait_url);
     }
+
+    await interaction.editReply({ embeds: [mainEmbed] });
+
+    // Trade advisor analysis in follow-up embed
+    const adviceEmbed = new EmbedBuilder()
+      .setColor(verdictColor as any)
+      .setTitle('Trade Advisor')
+      .setDescription(advice.advice.slice(0, 4096))
+      .setFooter({ text: 'AccessGrantedSportz  ·  Access Granted. Game On.' });
+
+    await interaction.followUp({ embeds: [adviceEmbed] });
 
   } catch (error) {
     console.error('Tradecheck error:', error);
