@@ -6,8 +6,14 @@ import {
 } from 'discord.js';
 import { query } from '../../config/database';
 import { generateTradeAdvice } from '../../services/aiStorylineService';
-import { calculateTradeValue, getMacroPosition, getPlayerTrajectory, getPositionalScarcity } from '../../services/tradeValueService';
-import { COLORS, createEmbed, getDevTraitIcon, getDevTraitLabel } from '../../config/brand';
+import {
+  calculateTradeValue,
+  getMacroPosition,
+  getPlayerTrajectory,
+  getPositionalScarcity
+} from '../../services/tradeValueService';
+import { getDraftPickValue, getPickLabel } from '../../services/draftPickService';
+import { COLORS, createEmbed, getDevTraitLabel } from '../../config/brand';
 
 const getLeagueForServer = async (guildId: string): Promise<any | null> => {
   const result = await query(
@@ -26,14 +32,14 @@ const findPlayer = async (
   input:    string,
   leagueId: string
 ): Promise<any | null> => {
+  if (!input) return null;
   const isUUID = input.length === 36 && input.includes('-');
   const result = await query(
     `SELECT
       p.id, p.first_name, p.last_name,
       p.position, p.overall_rating,
       p.dev_trait, p.age, p.speed,
-      p.team_id, p.portrait_url,
-      p.years_pro,
+      p.team_id, p.portrait_url, p.years_pro,
       t.name         as team_name,
       t.abbreviation as team_abbr,
       t.wins, t.losses
@@ -51,10 +57,7 @@ const findPlayer = async (
   return result.rows[0] || null;
 };
 
-const autocompleteSearch = async (
-  focused:  string,
-  leagueId: string
-) => {
+const autocompleteSearch = async (focused: string, leagueId: string) => {
   const result = await query(
     `SELECT p.id, p.first_name, p.last_name, p.position, t.abbreviation
      FROM players p
@@ -71,22 +74,71 @@ const autocompleteSearch = async (
   }));
 };
 
+// =============================================
+// PARSE PICK STRING
+// Accepts: "1,2,3" or "1st,2nd" or "1st round,2nd round"
+// Returns array of round numbers
+// =============================================
+const parsePicks = (pickString: string | null): number[] => {
+  if (!pickString) return [];
+  return pickString
+    .split(',')
+    .map(s => s.trim().replace(/[^0-9]/g, ''))
+    .filter(Boolean)
+    .map(Number)
+    .filter(n => n >= 1 && n <= 7);
+};
+
 export const data = new SlashCommandBuilder()
   .setName('tradecheck')
-  .setDescription('Trade analysis with full roster context')
-  .addStringOption(option =>
-    option
-      .setName('offering')
-      .setDescription('Player you are offering (supports autocomplete)')
-      .setRequired(true)
-      .setAutocomplete(true)
+  .setDescription('Trade analysis — supports multiple players and draft picks')
+  // ---- OFFERING SIDE ----
+  .addStringOption(o => o
+    .setName('offering1')
+    .setDescription('Player you are offering (required)')
+    .setRequired(true)
+    .setAutocomplete(true)
   )
-  .addStringOption(option =>
-    option
-      .setName('requesting')
-      .setDescription('Player you want in return (supports autocomplete)')
-      .setRequired(true)
-      .setAutocomplete(true)
+  .addStringOption(o => o
+    .setName('offering2')
+    .setDescription('Second player you are offering (optional)')
+    .setRequired(false)
+    .setAutocomplete(true)
+  )
+  .addStringOption(o => o
+    .setName('offering3')
+    .setDescription('Third player you are offering (optional)')
+    .setRequired(false)
+    .setAutocomplete(true)
+  )
+  .addStringOption(o => o
+    .setName('offering_picks')
+    .setDescription('Draft picks you are offering — e.g. "1,2,3" for 1st, 2nd, 3rd round')
+    .setRequired(false)
+  )
+  // ---- REQUESTING SIDE ----
+  .addStringOption(o => o
+    .setName('requesting1')
+    .setDescription('Player you want in return (required)')
+    .setRequired(true)
+    .setAutocomplete(true)
+  )
+  .addStringOption(o => o
+    .setName('requesting2')
+    .setDescription('Second player you want in return (optional)')
+    .setRequired(false)
+    .setAutocomplete(true)
+  )
+  .addStringOption(o => o
+    .setName('requesting3')
+    .setDescription('Third player you want in return (optional)')
+    .setRequired(false)
+    .setAutocomplete(true)
+  )
+  .addStringOption(o => o
+    .setName('requesting_picks')
+    .setDescription('Draft picks you want in return — e.g. "1,2" for 1st and 2nd round')
+    .setRequired(false)
   );
 
 export const autocomplete = async (
@@ -99,8 +151,9 @@ export const autocomplete = async (
   if (!focused || focused.length < 2) { await interaction.respond([]); return; }
 
   try {
-    const options = await autocompleteSearch(focused, league.id);
-    await interaction.respond(options);
+    await interaction.respond(
+      await autocompleteSearch(focused, league.id)
+    );
   } catch { await interaction.respond([]); }
 };
 
@@ -120,68 +173,112 @@ export const execute = async (
       return;
     }
 
-    const offeringInput   = interaction.options.getString('offering',   true);
-    const requestingInput = interaction.options.getString('requesting', true);
+    // Collect all inputs
+    const offeringInputs = [
+      interaction.options.getString('offering1'),
+      interaction.options.getString('offering2'),
+      interaction.options.getString('offering3')
+    ].filter(Boolean) as string[];
 
-    const [offered, requested] = await Promise.all([
-      findPlayer(offeringInput,   league.id),
-      findPlayer(requestingInput, league.id)
+    const requestingInputs = [
+      interaction.options.getString('requesting1'),
+      interaction.options.getString('requesting2'),
+      interaction.options.getString('requesting3')
+    ].filter(Boolean) as string[];
+
+    const offeringPickRounds   = parsePicks(
+      interaction.options.getString('offering_picks')
+    );
+    const requestingPickRounds = parsePicks(
+      interaction.options.getString('requesting_picks')
+    );
+
+    // Resolve all players
+    const [offeredPlayers, requestedPlayers] = await Promise.all([
+      Promise.all(offeringInputs.map(i => findPlayer(i, league.id))),
+      Promise.all(requestingInputs.map(i => findPlayer(i, league.id)))
     ]);
 
-    if (!offered) {
+    // Filter nulls and check minimums
+    const validOffered   = offeredPlayers.filter(Boolean);
+    const validRequested = requestedPlayers.filter(Boolean);
+
+    if (validOffered.length === 0 && offeringPickRounds.length === 0) {
       await interaction.editReply({
         embeds: [createEmbed(COLORS.DANGER)
-          .setTitle('Player Not Found')
-          .setDescription(
-            `No player matching "${offeringInput}" found.\n` +
-            `Try the autocomplete dropdown.`
-          )]
+          .setTitle('No Valid Players Found')
+          .setDescription('Could not find any of the offering players. Try autocomplete.')]
       });
       return;
     }
-    if (!requested) {
+    if (validRequested.length === 0 && requestingPickRounds.length === 0) {
       await interaction.editReply({
         embeds: [createEmbed(COLORS.DANGER)
-          .setTitle('Player Not Found')
-          .setDescription(
-            `No player matching "${requestingInput}" found.\n` +
-            `Try the autocomplete dropdown.`
-          )]
+          .setTitle('No Valid Players Found')
+          .setDescription('Could not find any of the requesting players. Try autocomplete.')]
       });
       return;
     }
 
     // Loading state
+    const offerSummary = [
+      ...validOffered.map((p: any) =>
+        `${p.first_name} ${p.last_name}`
+      ),
+      ...offeringPickRounds.map(r => `${r === 1 ? '1st' : r === 2 ? '2nd' : r === 3 ? '3rd' : `${r}th`} Round Pick`)
+    ].join(', ');
+
+    const requestSummary = [
+      ...validRequested.map((p: any) =>
+        `${p.first_name} ${p.last_name}`
+      ),
+      ...requestingPickRounds.map(r => `${r === 1 ? '1st' : r === 2 ? '2nd' : r === 3 ? '3rd' : `${r}th`} Round Pick`)
+    ].join(', ');
+
     await interaction.editReply({
       embeds: [createEmbed(COLORS.NAVY)
         .setTitle('Trade Advisor  ·  Analyzing')
         .setDescription(
-          `${offered.first_name} ${offered.last_name}` +
-          `  ↔  ` +
-          `${requested.first_name} ${requested.last_name}\n\n` +
-          `Calculating asset values and roster context...`
+          `**Offering:**  ${offerSummary}\n\n` +
+          `**Requesting:**  ${requestSummary}\n\n` +
+          `Calculating asset values...`
         )]
     });
 
-    // Force fresh AV calculations for both players
-    const [
-      offeredAV,
-      requestedAV,
-      offeredScarcity,
-      requestedScarcity
-    ] = await Promise.all([
-      calculateTradeValue(offered.id,   league.id, league.current_season),
-      calculateTradeValue(requested.id, league.id, league.current_season),
-      getPositionalScarcity(offered.id,   league.id),
-      getPositionalScarcity(requested.id, league.id)
+    // Calculate AV for all players
+    const enrichPlayer = async (p: any) => {
+      const [av, scarcity] = await Promise.all([
+        calculateTradeValue(p.id, league.id, league.current_season),
+        getPositionalScarcity(p.id, league.id)
+      ]);
+      return { ...p, av: av.total_value, scarcity };
+    };
+
+    const [enrichedOffered, enrichedRequested] = await Promise.all([
+      Promise.all(validOffered.map(enrichPlayer)),
+      Promise.all(validRequested.map(enrichPlayer))
     ]);
 
-    offered.av   = offeredAV.total_value;
-    requested.av = requestedAV.total_value;
+    // Calculate pick values
+    const offeringPicksAV = offeringPickRounds.reduce(
+      (sum, r) => sum + getDraftPickValue(r, null), 0
+    );
+    const requestingPicksAV = requestingPickRounds.reduce(
+      (sum, r) => sum + getDraftPickValue(r, null), 0
+    );
 
-    const avDiff      = Math.abs(offered.av - requested.av);
-    const avWinner    = offered.av > requested.av ? requested : offered;
-    const avLoser     = offered.av > requested.av ? offered   : requested;
+    // Total AV each side
+    const offeredPlayersAV   = enrichedOffered.reduce(
+      (sum: number, p: any) => sum + p.av, 0
+    );
+    const requestedPlayersAV = enrichedRequested.reduce(
+      (sum: number, p: any) => sum + p.av, 0
+    );
+
+    const totalOfferedAV   = offeredPlayersAV   + offeringPicksAV;
+    const totalRequestedAV = requestedPlayersAV + requestingPicksAV;
+    const avDiff           = Math.abs(totalOfferedAV - totalRequestedAV);
+    const avWinnerIsOffered = totalOfferedAV < totalRequestedAV;
 
     const verdict =
       avDiff <= 20  ? 'FAIR'            :
@@ -198,101 +295,115 @@ export const execute = async (
 
     // Get AI analysis
     const advice = await generateTradeAdvice(
-      [offered.id],
-      [requested.id],
+      enrichedOffered.map((p: any) => p.id),
+      enrichedRequested.map((p: any) => p.id),
       league.id,
       league.current_season
     );
 
-    const profileUrl1 = `https://accessgrantedsportz.com/player/${offered.id}`;
-    const profileUrl2 = `https://accessgrantedsportz.com/player/${requested.id}`;
-
-    const formatPlayerCard = (
-      p:        any,
-      av:       number,
-      scarcity: any,
-      label:    string,
-      url:      string
+    // =============================================
+    // FORMAT SIDE SUMMARY
+    // =============================================
+    const formatSide = (
+      players:    any[],
+      pickRounds: number[],
+      label:      string
     ): string => {
-      const trajectory = getPlayerTrajectory(p.age);
-      const macroPos   = getMacroPosition(p.position);
+      const lines: string[] = [];
 
-      return (
-        `**[${p.first_name} ${p.last_name}](${url})**\n` +
-        `${p.position}  ·  ${p.team_abbr || 'FA'}` +
-        `${p.team_abbr ? `  (${p.wins || 0}-${p.losses || 0})` : ''}\n` +
-        `\n` +
-        `OVR  ${p.overall_rating}` +
-        `  ·  Age  ${p.age}` +
-        `  ·  Spd  ${p.speed}\n` +
-        `${getDevTraitLabel(p.dev_trait)}\n` +
-        `\n` +
-        `AV  **${av.toFixed(0)}**\n` +
-        `Rank  #${scarcity.position_rank} of ${scarcity.position_total} ${macroPos}\n` +
-        `${scarcity.scarcity_label}\n` +
-        `Trajectory  ${trajectory.split(' — ')[0]}`
-      );
+      players.forEach((p: any) => {
+        const profileUrl = `https://accessgrantedsportz.com/player/${p.id}`;
+        const macro      = getMacroPosition(p.position);
+        const traj       = getPlayerTrajectory(p.age).split(' — ')[0];
+        lines.push(
+          `**[${p.first_name} ${p.last_name}](${profileUrl})**\n` +
+          `${p.position}  ·  ${p.team_abbr || 'FA'}` +
+          `${p.team_abbr ? `  (${p.wins || 0}-${p.losses || 0})` : ''}\n` +
+          `OVR ${p.overall_rating}  ·  Age ${p.age}  ·  Spd ${p.speed}\n` +
+          `${getDevTraitLabel(p.dev_trait)}  ·  ${traj}\n` +
+          `AV  **${p.av.toFixed(0)}**  ·  ` +
+          `#${p.scarcity.position_rank}/${p.scarcity.position_total} ${macro}\n` +
+          `${p.scarcity.scarcity_label}`
+        );
+      });
+
+      pickRounds.forEach(r => {
+        const roundLabel =
+          r === 1 ? '1st' : r === 2 ? '2nd' :
+          r === 3 ? '3rd' : `${r}th`;
+        const av = getDraftPickValue(r, null);
+        lines.push(
+          `**${roundLabel} Round Pick**\n` +
+          `AV  **${av}**  ·  Generic slot value`
+        );
+      });
+
+      return lines.join('\n\n') || 'None';
     };
 
-    // Main embed
+    // =============================================
+    // BUILD EMBEDS
+    // =============================================
+    const winnerTeam = avWinnerIsOffered
+      ? (enrichedOffered[0]?.team_name || 'Offering team')
+      : (enrichedRequested[0]?.team_name || 'Requesting team');
+
     const mainEmbed = new EmbedBuilder()
       .setColor(verdictColor as any)
       .setTitle(`Trade Analysis  ·  ${league.name}`)
       .setDescription(
         `**${verdict}**` +
         `  ·  AV Gap: **${avDiff.toFixed(0)}**` +
-        `  ·  **${avWinner.team_name || avWinner.team_abbr}** has the advantage`
+        `  ·  **${winnerTeam}** has the advantage`
       )
       .addFields(
         {
-          name:   `Offering  ·  ${offered.team_name || 'Free Agent'}`,
-          value:  formatPlayerCard(
-            offered, offered.av, offeredScarcity,
-            'Offering', profileUrl1
-          ),
+          name:   `Offering Side`,
+          value:  formatSide(
+            enrichedOffered, offeringPickRounds, 'Offering'
+          ).slice(0, 1024),
           inline: true
         },
         {
-          name:   `Receiving  ·  ${requested.team_name || 'Free Agent'}`,
-          value:  formatPlayerCard(
-            requested, requested.av, requestedScarcity,
-            'Receiving', profileUrl2
-          ),
+          name:   `Requesting Side`,
+          value:  formatSide(
+            enrichedRequested, requestingPickRounds, 'Requesting'
+          ).slice(0, 1024),
           inline: true
         },
         {
-          name:   'AV Breakdown',
+          name:   'AV Summary',
           value:
-            `${offered.first_name} ${offered.last_name}` +
-            `  →  AV **${offered.av.toFixed(0)}**\n` +
-            `${requested.first_name} ${requested.last_name}` +
-            `  →  AV **${requested.av.toFixed(0)}**\n` +
-            `Gap  **${avDiff.toFixed(0)} AV** favoring ` +
-            `**${avWinner.first_name} ${avWinner.last_name}**`,
+            `Offering side total  **${totalOfferedAV.toFixed(0)} AV**` +
+            `${offeringPicksAV > 0
+              ? ` (players: ${offeredPlayersAV.toFixed(0)} + picks: ${offeringPicksAV})`
+              : ''}\n` +
+            `Requesting side total  **${totalRequestedAV.toFixed(0)} AV**` +
+            `${requestingPicksAV > 0
+              ? ` (players: ${requestedPlayersAV.toFixed(0)} + picks: ${requestingPicksAV})`
+              : ''}\n` +
+            `Gap  **${avDiff.toFixed(0)} AV** favoring **${winnerTeam}**`,
           inline: false
         }
       )
       .setFooter({
         text:
           'AV — Asset Value  ·  ' +
-          'Accounts for overall, age curve, dev trait, speed, and positional scarcity  ·  ' +
+          'Accounts for overall, age, dev trait, speed, and positional scarcity  ·  ' +
           'AccessGrantedSportz'
       })
       .setTimestamp();
 
-    // Add portraits if available
-    if (offered.portrait_url) {
-      mainEmbed.setThumbnail(offered.portrait_url);
-    }
-
     await interaction.editReply({ embeds: [mainEmbed] });
 
-    // Trade advisor analysis in follow-up embed
+    // Trade advisor follow-up
     const adviceEmbed = new EmbedBuilder()
       .setColor(verdictColor as any)
       .setTitle('Trade Advisor')
       .setDescription(advice.advice.slice(0, 4096))
-      .setFooter({ text: 'AccessGrantedSportz  ·  Access Granted. Game On.' });
+      .setFooter({
+        text: 'AccessGrantedSportz  ·  Access Granted. Game On.'
+      });
 
     await interaction.followUp({ embeds: [adviceEmbed] });
 

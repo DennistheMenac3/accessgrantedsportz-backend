@@ -7,9 +7,14 @@ import {
   TextChannel
 } from 'discord.js';
 import { query } from '../config/database';
-import { buildTeamDashboardEmbed, buildRosterEmbed, buildTeamButtons } from './commands/team';
+import { COLORS, createEmbed } from '../config/brand';
+import {
+  buildTeamDashboardEmbed,
+  buildRosterEmbed,
+  buildTeamButtons
+} from './commands/team';
 
-export const client = new Client({
+export const client   = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
@@ -19,10 +24,12 @@ export const client = new Client({
 
 export const commands = new Collection<string, any>();
 
+// =============================================
+// BOT READY
+// =============================================
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`🤖 Discord bot logged in as ${readyClient.user.tag}`);
   console.log(`📡 Bot is in ${readyClient.guilds.cache.size} servers`);
-
   try {
     await query('SELECT 1');
     console.log('✅ Discord bot database connection ready');
@@ -31,132 +38,438 @@ client.once(Events.ClientReady, async (readyClient) => {
   }
 });
 
+// =============================================
+// INTERACTION HANDLER
+// =============================================
 client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
+  // =============================================
+  // AUTOCOMPLETE
+  // =============================================
   if (interaction.isAutocomplete()) {
     const command = commands.get(interaction.commandName);
     if (command?.autocomplete) {
       try {
         await command.autocomplete(interaction);
       } catch (error) {
-        console.error(`Autocomplete error for ${interaction.commandName}:`, error);
+        console.error(
+          `Autocomplete error for ${interaction.commandName}:`, error
+        );
       }
     }
     return;
   }
 
+  // =============================================
+  // BUTTON INTERACTIONS
+  // =============================================
   if (interaction.isButton()) {
     try {
-      // --- TEAM DASHBOARD & ROSTER PAGINATION ---
-      if (interaction.customId.startsWith('teamview_')) {
-        // 1. TELL DISCORD WE ARE THINKING (Prevents 3-second timeout)
+      const { customId } = interaction;
+
+      // ----------------------------------------
+      // TEAM DASHBOARD PAGINATION
+      // ----------------------------------------
+      if (customId.startsWith('teamview_')) {
         await interaction.deferUpdate();
 
-        const [, teamId, pageStr] = interaction.customId.split('_');
-        const targetPage = parseInt(pageStr, 10);
-        
-        // 2. RUN THE DB QUERIES
-        const teamRes = await query(
-          `SELECT id, name, city, abbreviation, overall_rating, team_logo_url FROM teams WHERE id = $1`, 
-          [teamId]
-        );
-        const rosterRes = await query(
-          `SELECT p.first_name, p.last_name, p.position, p.overall_rating, p.age, p.speed, tvh.total_value 
-           FROM players p LEFT JOIN trade_value_history tvh ON p.id = tvh.player_id
-           WHERE p.team_id = $1 ORDER BY p.overall_rating DESC`,
-          [teamId]
-        );
+        const [, teamId, pageStr] = customId.split('_');
+        const targetPage          = parseInt(pageStr, 10);
 
-        if (teamRes.rows.length === 0 || rosterRes.rows.length === 0) {
-          // Use editReply because we already deferred
-          await interaction.editReply({ content: '❌ Data expired or not found.', components: [], embeds: [] });
+        const [teamRes, rosterRes] = await Promise.all([
+          query(
+            `SELECT id, name, city, abbreviation,
+              overall_rating, team_logo_url
+             FROM teams WHERE id = $1`,
+            [teamId]
+          ),
+          query(
+            `SELECT p.first_name, p.last_name, p.position,
+              p.overall_rating, p.age, p.speed,
+              tvh.total_value
+             FROM players p
+             LEFT JOIN trade_value_history tvh
+               ON p.id = tvh.player_id
+             WHERE p.team_id = $1
+             ORDER BY p.overall_rating DESC`,
+            [teamId]
+          )
+        ]);
+
+        if (
+          teamRes.rows.length === 0 ||
+          rosterRes.rows.length === 0
+        ) {
+          await interaction.editReply({
+            content:    'Data expired or not found.',
+            components: [],
+            embeds:     []
+          });
           return;
         }
 
-        const team = teamRes.rows[0];
-        const players = rosterRes.rows;
+        const team       = teamRes.rows[0];
+        const players    = rosterRes.rows;
         const totalPages = Math.ceil(players.length / 10);
 
         let newEmbed;
         if (targetPage === 0) {
-            const gamesRes = await query(
-                `SELECT home_team_id, away_team_id, home_score, away_score FROM games WHERE home_team_id = $1 OR away_team_id = $1`,
-                [team.id]
-            );
-            let w = 0, l = 0, t = 0, pf = 0, pa = 0;
-            gamesRes.rows.forEach(game => {
-                const isHome = game.home_team_id === team.id;
-                const ptFor = isHome ? game.home_score : game.away_score;
-                const ptAgn = isHome ? game.away_score : game.home_score;
-                pf += ptFor; pa += ptAgn;
-                if (ptFor > ptAgn) w++; else if (ptFor < ptAgn) l++; else t++;
-            });
-            const totalTVS = players.reduce((sum: number, p: any) => sum + (parseFloat(p.total_value) || 0), 0);
-            
-            newEmbed = buildTeamDashboardEmbed(team, players, w, l, t, pf, pa, totalTVS);
+          const gamesRes = await query(
+            `SELECT home_team_id, away_team_id,
+              home_score, away_score
+             FROM games
+             WHERE home_team_id = $1
+             OR    away_team_id = $1`,
+            [team.id]
+          );
+
+          let w = 0, l = 0, t = 0, pf = 0, pa = 0;
+          gamesRes.rows.forEach((game: any) => {
+            const isHome = game.home_team_id === team.id;
+            const ptFor  = isHome ? game.home_score : game.away_score;
+            const ptAgn  = isHome ? game.away_score : game.home_score;
+            pf += ptFor; pa += ptAgn;
+            if      (ptFor > ptAgn) w++;
+            else if (ptFor < ptAgn) l++;
+            else                    t++;
+          });
+
+          const totalAV = players.reduce(
+            (sum: number, p: any) =>
+              sum + (parseFloat(p.total_value) || 0),
+            0
+          );
+
+          newEmbed = buildTeamDashboardEmbed(
+            team, players, w, l, t, pf, pa, totalAV
+          );
         } else {
-            newEmbed = buildRosterEmbed(team, players, targetPage, totalPages);
+          newEmbed = buildRosterEmbed(
+            team, players, targetPage, totalPages
+          );
         }
 
-        const newButtons = buildTeamButtons(teamId, targetPage, totalPages);
-        
-        // 3. EDIT THE REPLY WITH THE NEW PAGE
-        await interaction.editReply({ embeds: [newEmbed], components: [newButtons] });
+        const newButtons = buildTeamButtons(
+          teamId, targetPage, totalPages
+        );
+
+        await interaction.editReply({
+          embeds:     [newEmbed],
+          components: [newButtons]
+        });
         return;
       }
 
-      // --- TRADE APPROVAL ENGINE ---
-      const [action, type, tradeId] = interaction.customId.split('_');
-      if (type === 'trade') {
-        const member = interaction.member as any;
-        const isCommish = member?.roles?.cache?.some((r: any) => r.name.toLowerCase() === 'commissioner');
+      // ----------------------------------------
+      // TRADE APPROVAL ENGINE
+      // ----------------------------------------
+      if (customId.startsWith('approve_trade_')) {
+        const tradeId = customId.replace('approve_trade_', '');
+
+        // Verify commissioner
+        const commishCheck = await query(
+          `SELECT u.discord_user_id
+           FROM leagues l
+           JOIN users u ON u.id = l.owner_id
+           WHERE l.discord_guild_id = $1`,
+          [interaction.guildId]
+        );
+
+        const isCommish =
+          commishCheck.rows[0]?.discord_user_id === interaction.user.id ||
+          (interaction.member as any)?.roles?.cache?.some(
+            (r: any) => r.name.toLowerCase() === 'commissioner'
+          );
 
         if (!isCommish) {
-          return interaction.reply({ content: "🚫 Only the Commissioner can approve/deny trades.", ephemeral: true });
+          await interaction.reply({
+            content:   'Only the Commissioner can approve trades.',
+            ephemeral: true
+          });
+          return;
         }
 
-        if (action === 'approve') {
-          await query(`UPDATE trades SET status = 'approved' WHERE id = $1`, [tradeId]);
-          await interaction.update({ content: '✅ **Trade Approved.**', components: [] });
-        } else if (action === 'deny') {
-          await query(`UPDATE trades SET status = 'denied' WHERE id = $1`, [tradeId]);
-          await interaction.update({ content: '❌ **Trade Denied.**', components: [] });
+        // Get trade
+        const tradeResult = await query(
+          `SELECT * FROM trades WHERE id = $1`,
+          [tradeId]
+        );
+
+        if (tradeResult.rows.length === 0) {
+          await interaction.reply({
+            content:   'Trade not found.',
+            ephemeral: true
+          });
+          return;
         }
+
+        const trade = tradeResult.rows[0];
+
+        // Move players to new teams
+        const proposerPlayers = JSON.parse(
+          trade.proposer_players || '[]'
+        );
+        const partnerPlayers  = JSON.parse(
+          trade.partner_players  || '[]'
+        );
+
+        await Promise.all([
+          ...proposerPlayers.map((playerId: string) =>
+            query(
+              `UPDATE players SET team_id = $1 WHERE id = $2`,
+              [trade.partner_team_id, playerId]
+            )
+          ),
+          ...partnerPlayers.map((playerId: string) =>
+            query(
+              `UPDATE players SET team_id = $1 WHERE id = $2`,
+              [trade.proposer_team_id, playerId]
+            )
+          )
+        ]);
+
+        // Update trade status
+        await query(
+          `UPDATE trades SET status = 'approved', updated_at = NOW()
+           WHERE id = $1`,
+          [tradeId]
+        );
+
+        await interaction.update({
+          embeds: [createEmbed(COLORS.SUCCESS)
+            .setTitle('Trade Approved')
+            .setDescription(
+              `Trade approved by <@${interaction.user.id}>.\n` +
+              `Players have been moved to their new teams.\n` +
+              `Trade ID: \`${tradeId}\``
+            )],
+          components: []
+        });
         return;
       }
+
+      // ----------------------------------------
+      // TRADE DENIAL
+      // ----------------------------------------
+      if (customId.startsWith('deny_trade_')) {
+        const tradeId = customId.replace('deny_trade_', '');
+
+        const commishCheck = await query(
+          `SELECT u.discord_user_id
+           FROM leagues l
+           JOIN users u ON u.id = l.owner_id
+           WHERE l.discord_guild_id = $1`,
+          [interaction.guildId]
+        );
+
+        const isCommish =
+          commishCheck.rows[0]?.discord_user_id === interaction.user.id ||
+          (interaction.member as any)?.roles?.cache?.some(
+            (r: any) => r.name.toLowerCase() === 'commissioner'
+          );
+
+        if (!isCommish) {
+          await interaction.reply({
+            content:   'Only the Commissioner can deny trades.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        await query(
+          `UPDATE trades SET status = 'denied', updated_at = NOW()
+           WHERE id = $1`,
+          [tradeId]
+        );
+
+        await interaction.update({
+          embeds: [createEmbed(COLORS.DANGER)
+            .setTitle('Trade Denied')
+            .setDescription(
+              `Trade denied by <@${interaction.user.id}>.\n` +
+              `Trade ID: \`${tradeId}\``
+            )],
+          components: []
+        });
+        return;
+      }
+
+      // ----------------------------------------
+      // COUNTER REQUEST
+      // ----------------------------------------
+      if (customId.startsWith('counter_trade_')) {
+        const tradeId = customId.replace('counter_trade_', '');
+
+        await query(
+          `UPDATE trades
+           SET status     = 'counter_requested',
+               updated_at = NOW()
+           WHERE id = $1`,
+          [tradeId]
+        );
+
+        await interaction.update({
+          embeds: [createEmbed(COLORS.GOLD)
+            .setTitle('Counter Requested')
+            .setDescription(
+              `A counter offer has been requested by ` +
+              `<@${interaction.user.id}>.\n` +
+              `The proposing team should resubmit with adjusted terms.\n` +
+              `Trade ID: \`${tradeId}\``
+            )],
+          components: []
+        });
+        return;
+      }
+
+      // ----------------------------------------
+      // FORCE WIN BUTTONS
+      // ----------------------------------------
+      if (
+        customId.startsWith('fw_away_') ||
+        customId.startsWith('fw_home_')
+      ) {
+        const isAway  = customId.startsWith('fw_away_');
+        const gameId  = customId
+          .replace('fw_away_', '')
+          .replace('fw_home_', '');
+
+        const commishCheck = await query(
+          `SELECT u.discord_user_id
+           FROM leagues l
+           JOIN users u ON u.id = l.owner_id
+           WHERE l.discord_guild_id = $1`,
+          [interaction.guildId]
+        );
+
+        if (
+          commishCheck.rows[0]?.discord_user_id !== interaction.user.id
+        ) {
+          await interaction.reply({
+            content:   'Only the Commissioner can issue force wins.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        const gameResult = await query(
+          `SELECT g.*,
+            ht.name as home_team,
+            ht.abbreviation as home_abbr,
+            at.name as away_team,
+            at.abbreviation as away_abbr
+           FROM games g
+           JOIN teams ht ON ht.id = g.home_team_id
+           JOIN teams at ON at.id = g.away_team_id
+           WHERE g.id = $1`,
+          [gameId]
+        );
+
+        if (gameResult.rows.length === 0) {
+          await interaction.reply({
+            content:   'Game not found.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        const game      = gameResult.rows[0];
+        const homeScore = isAway ? 0  : 27;
+        const awayScore = isAway ? 27 : 0;
+        const winnerAbbr = isAway ? game.away_abbr : game.home_abbr;
+        const winner    = isAway ? game.away_team  : game.home_team;
+
+        await query(
+          `UPDATE games SET
+            home_score     = $1,
+            away_score     = $2,
+            is_force_win   = true,
+            force_win_team = $3
+           WHERE id = $4`,
+          [homeScore, awayScore, winnerAbbr, gameId]
+        );
+
+        await interaction.reply({
+          embeds: [createEmbed(COLORS.WARNING)
+            .setTitle(`Force Win  ·  ${winnerAbbr}`)
+            .setDescription(
+              `**${winner}** has been awarded a force win.\n` +
+              `${game.away_team} @ ${game.home_team}`
+            )]
+        });
+        return;
+      }
+
+      // ----------------------------------------
+      // SCHEDULE GAME BUTTON
+      // ----------------------------------------
+      if (customId.startsWith('schedule_')) {
+        const gameId = customId.replace('schedule_', '');
+        await interaction.reply({
+          content:   `To schedule this game use: \`/schedule game:${gameId}\``,
+          ephemeral: true
+        });
+        return;
+      }
+
+      // ----------------------------------------
+      // MARK PLAYED BUTTON
+      // ----------------------------------------
+      if (customId.startsWith('played_')) {
+        await interaction.reply({
+          content:   'Submit your scores via the Companion App export.',
+          ephemeral: true
+        });
+        return;
+      }
+
     } catch (error) {
       console.error('Button interaction error:', error);
     }
     return;
   }
 
+  // =============================================
+  // SLASH COMMANDS
+  // =============================================
   if (!interaction.isChatInputCommand()) return;
 
   const command = commands.get(interaction.commandName);
-
   if (!command) return;
 
   try {
     await command.execute(interaction);
   } catch (error: any) {
     console.error(`Error executing ${interaction.commandName}:`, error);
-    
-    // Grab the exact error message so we can read it in Discord
+
     const errorString = error.message || 'Unknown Error';
-    const msg = `❌ **Application Crash:**\n\`\`\`\n${errorString}\n\`\`\`\n*The bot crashed before it could finish processing.*`;
+    const msg =
+      `Application Error:\n\`\`\`\n${errorString}\n\`\`\``;
 
     try {
-      if (interaction.deferred) {
-        // If it was thinking, replace the stuck thinking message with the exact error!
-        await interaction.editReply({ content: msg, embeds: [], components: [] });
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({
+          content:    msg,
+          embeds:     [],
+          components: []
+        });
       } else {
-        await interaction.reply({ content: msg, ephemeral: true });
+        await interaction.reply({
+          content:   msg,
+          ephemeral: true
+        });
       }
-    } catch { }
+    } catch { /* ignore */ }
   }
-}); // <--- THIS WAS THE MISSING BRACE!
+});
 
-export const postToChannel = async (channelId: string, content: string): Promise<void> => {
+// =============================================
+// POST TO CHANNEL
+// =============================================
+export const postToChannel = async (
+  channelId: string,
+  content:   string
+): Promise<void> => {
   try {
     const channel = await client.channels.fetch(channelId);
     if (channel && channel instanceof TextChannel) {
@@ -174,7 +487,13 @@ export const postToChannel = async (channelId: string, content: string): Promise
   }
 };
 
-export const splitMessage = (text: string, maxLength: number): string[] => {
+// =============================================
+// SPLIT MESSAGE
+// =============================================
+export const splitMessage = (
+  text:      string,
+  maxLength: number
+): string[] => {
   const chunks: string[] = [];
   const lines   = text.split('\n');
   let current   = '';
@@ -191,6 +510,9 @@ export const splitMessage = (text: string, maxLength: number): string[] => {
   return chunks;
 };
 
+// =============================================
+// START BOT
+// =============================================
 export const startBot = async (): Promise<void> => {
   try {
     await client.login(process.env.DISCORD_BOT_TOKEN);
