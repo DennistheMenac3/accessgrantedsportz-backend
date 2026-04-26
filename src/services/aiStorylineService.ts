@@ -2290,14 +2290,11 @@ export const generateTradeAdvice = async (
       );
       if (result.rows.length > 0) {
         const player = result.rows[0];
-        // Always force fresh AV calculation
         const { total_value, breakdown } = await calculateTradeValue(
           id, leagueId, season
         );
         player.total_value     = total_value;
         player.value_breakdown = breakdown;
-
-        // Get scarcity data
         player.scarcity = await getPositionalScarcity(id, leagueId);
         players.push(player);
       }
@@ -2366,12 +2363,8 @@ export const generateTradeAdvice = async (
     getTeamDraftPicksForAdvice(requestedTeamId)
   ]);
 
-  const offeredValue   = offeredPlayers.reduce(
-    (sum, p) => sum + p.total_value, 0
-  );
-  const requestedValue = requestedPlayers.reduce(
-    (sum, p) => sum + p.total_value, 0
-  );
+  const offeredValue   = offeredPlayers.reduce((sum, p) => sum + p.total_value, 0);
+  const requestedValue = requestedPlayers.reduce((sum, p) => sum + p.total_value, 0);
   const valueDiff    = offeredValue - requestedValue;
   const absValueDiff = Math.abs(valueDiff);
 
@@ -2405,15 +2398,10 @@ export const generateTradeAdvice = async (
       ? 'No picks in rounds 1-3'
       : picks.map(p =>
           `  Rd${p.round} Pick #${p.pick_number || '?'} ` +
-          `${p.original_team_abbr !== teamAbbr
-            ? `(via ${p.original_team_abbr})` : '(own)'}` +
+          `${p.original_team_abbr !== teamAbbr ? `(via ${p.original_team_abbr})` : '(own)'}` +
           ` AV: ${p.trade_value}`
         ).join('\n');
 
-  // =============================================
-  // BUILD SCARCITY + TRAJECTORY CONTEXT
-  // Pure data — no AI tokens wasted on this
-  // =============================================
   const formatPlayerContext = (p: any) => {
     const macro      = getMacroPosition(p.position);
     const trajectory = getPlayerTrajectory(p.age);
@@ -2433,42 +2421,36 @@ export const generateTradeAdvice = async (
     );
   };
 
-  // Positional overlap check
-  const offeredMacros   = offeredPlayers.map(
-    (p: any) => getMacroPosition(p.position)
-  );
-  const requestedMacros = requestedPlayers.map(
-    (p: any) => getMacroPosition(p.position)
-  );
-  const hasOverlap = offeredMacros.some(
-    (pos: string) => requestedMacros.includes(pos)
-  );
+  const offeredMacros   = offeredPlayers.map((p: any) => getMacroPosition(p.position));
+  const requestedMacros = requestedPlayers.map((p: any) => getMacroPosition(p.position));
+  const hasOverlap = offeredMacros.some((pos: string) => requestedMacros.includes(pos));
   const overlapNote = hasOverlap
-    ? `Both players occupy the same position group (${offeredMacros[0]}). ` +
-      `Factor in whether receiving teams already have depth there.`
+    ? `Both players occupy the same position group (${offeredMacros[0]}). Factor in whether receiving teams already have depth there.`
     : `These players play different position groups — both teams address a different need.`;
 
   // =============================================
   // SYSTEM PROMPT
   // =============================================
   const systemPrompt =
-    `You are the Trade Advisor for AccessGrantedSportz, ` +
-    `a competitive franchise league platform.\n\n` +
-    CRITICAL_RULES + `\n\n` +
+    `You are the Trade Advisor for AccessGrantedSportz, a competitive franchise league platform.\n\n` +
+    `CRITICAL RULES — FOLLOW WITHOUT EXCEPTION:\n` +
+    `1. Base ALL analysis EXCLUSIVELY on the league data provided. No exceptions.\n` +
+    `2. Do NOT reference real NFL history, Super Bowl results, or real-world outcomes.\n` +
+    `3. Do NOT assume any team or player is elite based on real NFL reputation. A 1-10 Chiefs team is a bad team in this league. Judge only by the numbers.\n` +
+    `4. Do NOT mention any player by name unless they appear in the data provided.\n` +
+    `5. Do NOT give any franchise preferential treatment based on popularity.\n` +
+    `6. Never mention video games, simulation, or anything that breaks immersion.\n` +
+    `7. Never invent stats, plays, or events not present in the data.\n` +
+    `8. This league exists in its own universe. Real-world news has zero relevance.\n` +
+    `9. Do NOT use markdown headers (##, **, ---). Write in plain paragraphs.\n` +
+    `10. Your verdict and recommendation MUST be consistent throughout. If you say one team wins the trade, do not recommend that team accept it.\n\n` +
     `TRADE ADVISOR SPECIFIC RULES:\n` +
-    `1. The AV (Asset Value) numbers are the source of truth. ` +
-    `Higher AV = better value. The team receiving higher AV wins the trade.\n` +
-    `2. A younger ascending player is worth MORE than an older declining player ` +
-    `at the same position — even if the older player has a higher current OVR. ` +
-    `The AV system already accounts for this. Trust it.\n` +
-    `3. If a player is IRREPLACEABLE or ELITE SCARCE at their position, ` +
-    `that significantly raises their real value beyond raw AV.\n` +
-    `4. A rational GM never trades an ascending XFactor for a declining one ` +
-    `at the same position without significant extra compensation. Call this out.\n` +
-    `5. Consider positional overlap — trading for depth at a position you already ` +
-    `have covered is less valuable than filling a genuine need.\n` +
-    `6. Your verdict in the opening sentence MUST match your final recommendation. ` +
-    `If Team A wins the trade, recommend Team B reject or counter — not accept.\n` +
+    `1. The AV (Asset Value) numbers are the source of truth. Higher AV = better value. The team receiving higher AV wins the trade.\n` +
+    `2. A younger ascending player is worth MORE than an older declining player at the same position — even if the older player has a higher current OVR. The AV system already accounts for this. Trust it.\n` +
+    `3. If a player is IRREPLACEABLE or ELITE SCARCE at their position, that significantly raises their real value beyond raw AV.\n` +
+    `4. A rational GM never trades an ascending XFactor for a declining one at the same position without significant extra compensation. Call this out.\n` +
+    `5. Consider positional overlap — trading for depth at a position you already have covered is less valuable than filling a genuine need.\n` +
+    `6. Your verdict in the opening sentence MUST match your final recommendation. If Team A wins the trade, recommend Team B reject or counter — not accept.\n` +
     `7. Write in four clean paragraphs under 300 words total:\n` +
     `   Para 1: Verdict — who wins and by how much\n` +
     `   Para 2: Why — trajectory, scarcity, positional context\n` +
@@ -2476,39 +2458,42 @@ export const generateTradeAdvice = async (
     `   Para 4: Final recommendation — who should do what`;
 
   // =============================================
-  // USER PROMPT
+  // USER PROMPT (FIXED DIRECTION LOGIC)
   // =============================================
   const userPrompt =
     `Analyze this trade proposal.\n\n` +
+    
+    `TRADE DIRECTION:\n` +
+    `The Offering Team (${offeredPlayers[0].team_name}) is proposing to SEND the 'Offered Assets' to the Requesting Team (${requestedPlayers[0].team_name}).\n` +
+    `The Offering Team (${offeredPlayers[0].team_name}) is proposing to RECEIVE the 'Requested Assets' from the Requesting Team (${requestedPlayers[0].team_name}).\n\n` +
 
     `AV SUMMARY:\n` +
-    `Offering side total AV: ${offeredValue.toFixed(1)}\n` +
-    `Receiving side total AV: ${requestedValue.toFixed(1)}\n` +
-    `Gap: ${absValueDiff.toFixed(1)} AV favoring ${winningTeam}\n` +
-    `Verdict: ${verdict}\n\n` +
+    `Offered Assets Total AV: ${offeredValue.toFixed(1)}\n` +
+    `Requested Assets Total AV: ${requestedValue.toFixed(1)}\n` +
+    `Value Gap: ${absValueDiff.toFixed(1)} AV\n` +
+    `Verdict: ${verdict}\n` +
+    `The team receiving the higher AV wins the trade. Therefore, the clear winner of this proposal is ${winningTeam}.\n\n` +
 
-    `PLAYERS BEING OFFERED:\n` +
+    `OFFERED ASSETS (Leaving ${offeredPlayers[0].team_name}, Going to ${requestedPlayers[0].team_name}):\n` +
     offeredPlayers.map(formatPlayerContext).join('\n\n') + `\n\n` +
 
-    `PLAYERS BEING REQUESTED:\n` +
+    `REQUESTED ASSETS (Leaving ${requestedPlayers[0].team_name}, Going to ${offeredPlayers[0].team_name}):\n` +
     requestedPlayers.map(formatPlayerContext).join('\n\n') + `\n\n` +
 
     `POSITIONAL CONTEXT:\n` +
     overlapNote + `\n\n` +
 
-    `ROSTERS:\n` +
+    `CURRENT ROSTERS (Before Trade):\n` +
     formatRoster(offeredRoster,   offeredPlayers[0].team_name) + `\n\n` +
     formatRoster(requestedRoster, requestedPlayers[0].team_name) + `\n\n` +
 
-    `DRAFT PICKS:\n` +
-    `${offeredPlayers[0].team_name}:\n` +
+    `DRAFT PICKS (Included in Trade):\n` +
+    `${offeredPlayers[0].team_name} is sending:\n` +
     formatPicks(offeredPicks,   offeredPlayers[0].team_abbr) + `\n` +
-    `${requestedPlayers[0].team_name}:\n` +
+    `${requestedPlayers[0].team_name} is sending:\n` +
     formatPicks(requestedPicks, requestedPlayers[0].team_abbr) + `\n\n` +
 
-    `Write your analysis now. Plain text. No headers. No bullet points. ` +
-    `Four paragraphs. Under 300 words. ` +
-    `Your opening verdict and closing recommendation must be consistent.`;
+    `Write your analysis now. Plain text. No headers. No bullet points. Four paragraphs. Under 300 words. Your opening verdict and closing recommendation must explicitly state that ${winningTeam} wins this trade and the other team should reject it.`;
 
   const response = await anthropic.messages.create({
     model:      'claude-sonnet-4-5',

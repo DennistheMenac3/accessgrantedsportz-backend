@@ -79,4 +79,74 @@ router.put('/:id', update);
 // DELETE /api/leagues/:id
 router.delete('/:id', remove);
 
+router.get('/:leagueId/teams', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    
+    // Fetch all teams for the league and join with users table to get the owner's username
+    const result = await query(
+      `SELECT t.*, u.username as owner_username
+       FROM teams t
+       LEFT JOIN users u ON u.id = t.owner_id
+       WHERE t.league_id = $1
+       ORDER BY t.conference ASC, t.division ASC, t.name ASC`,
+      [leagueId]
+    );
+    
+    res.json({ teams: result.rows });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to load teams' });
+  }
+
+  router.get('/:leagueId/teams/:teamId', async (req, res) => {
+  try {
+    const { leagueId, teamId } = req.params;
+
+    // 1. Get the Team Info
+    const teamRes = await query(
+      `SELECT t.*, u.username as owner_username 
+       FROM teams t 
+       LEFT JOIN users u ON u.id = t.owner_id 
+       WHERE t.id = $1 AND t.league_id = $2`,
+      [teamId, leagueId]
+    );
+
+    if (teamRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Team not found' });
+    }
+
+    // 2. Get the Roster (Joined with Trade Value)
+    const rosterRes = await query(
+      `SELECT p.id, p.first_name, p.last_name, p.position, p.overall_rating, p.age, p.dev_trait, tvh.total_value as trade_value
+       FROM players p
+       LEFT JOIN trade_value_history tvh ON tvh.player_id = p.id AND tvh.league_id = $1
+       WHERE p.team_id = $2 AND p.league_id = $1
+       ORDER BY p.overall_rating DESC`,
+      [leagueId, teamId]
+    );
+
+    // 3. Get the Draft Picks
+    const picksRes = await query(
+      `SELECT dp.*, ot.abbreviation as original_team_abbr
+       FROM draft_picks dp
+       JOIN teams ot ON ot.id = dp.original_team_id
+       WHERE dp.current_team_id = $1 AND dp.league_id = $2 AND dp.is_used = false
+       ORDER BY dp.season ASC, dp.round ASC`,
+      [teamId, leagueId]
+    );
+
+    res.json({
+      team: teamRes.rows[0],
+      roster: rosterRes.rows,
+      picks: picksRes.rows
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Server error loading team details' });
+  }
+});
+
+});
+
 export default router;
